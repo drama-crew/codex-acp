@@ -1,0 +1,61 @@
+name: drama-release
+
+# Builds the drama fork's codex-acp binary (with the exec_command `summary`
+# patch from drama-crew/codex) for linux amd64+arm64 and attaches them to a
+# GitHub release. The drama sandbox image downloads the matching prebuilt
+# instead of `npm i -g @zed-industries/codex-acp`.
+#
+# Tag convention: drama-vX.Y.Z (see DRAMA_FORK.md). Cargo.lock pins the exact
+# drama-crew/codex commit, so builds are reproducible.
+
+on:
+  push:
+    tags: ["drama-v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake perl
+      - name: Build codex-acp (release)
+        run: cargo build --release --bin codex-acp --target ${{ matrix.target }}
+      - name: Stage binary
+        run: |
+          install -m755 "target/${{ matrix.target }}/release/codex-acp" "codex-acp-${{ matrix.target }}"
+          ./codex-acp-${{ matrix.target }} --help >/dev/null 2>&1 || true
+          grep -ac summary "codex-acp-${{ matrix.target }}" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-acp-${{ matrix.target }}
+          path: codex-acp-${{ matrix.target }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/codex-acp-*
+          generate_release_notes: true

@@ -64,3 +64,21 @@ tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev 
 
 [patch."https://github.com/openai/codex"]
 codex-utils-pty = { path = "vendor/codex-utils-pty" }
+# drama summary-titles: override every codex-* crate with our fork's branch
+# (drama-crew/codex @ drama/summary-titles) — adds exec_command `summary` →
+# ExecCommandBeginEvent so codex-acp can use it as the tool-call title.
+# Cargo.lock pins the exact commit for reproducible builds.
+codex-apply-patch = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-arg0 = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-config = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-core = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-exec-server = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-extension-api = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-mcp-server = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-models-manager = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-protocol = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-login = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-shell-command = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-thread-store = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-utils-approval-presets = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-utils-cli = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }

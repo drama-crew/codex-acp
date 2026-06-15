@@ -1637,7 +1637,7 @@ dependencies = [
 [[package]]
 name = "codex-agent-identity"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "base64",
@@ -1656,7 +1656,7 @@ dependencies = [
 [[package]]
 name = "codex-analytics"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-app-server-protocol",
  "codex-git-utils",
@@ -1675,7 +1675,7 @@ dependencies = [
 [[package]]
 name = "codex-api"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -1705,7 +1705,7 @@ dependencies = [
 [[package]]
 name = "codex-app-server-protocol"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "clap",
@@ -1729,7 +1729,7 @@ dependencies = [
 [[package]]
 name = "codex-apply-patch"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "codex-exec-server",
@@ -1744,7 +1744,7 @@ dependencies = [
 [[package]]
 name = "codex-arg0"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
@@ -1762,7 +1762,7 @@ dependencies = [
 [[package]]
 name = "codex-async-utils"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "tokio",
@@ -1772,7 +1772,7 @@ dependencies = [
 [[package]]
 name = "codex-aws-auth"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -1786,7 +1786,7 @@ dependencies = [
 [[package]]
 name = "codex-client"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1812,7 +1812,7 @@ dependencies = [
 [[package]]
 name = "codex-code-mode"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-protocol",
  "deno_core_icudata",
@@ -1827,12 +1827,12 @@ dependencies = [
 [[package]]
 name = "codex-collaboration-mode-templates"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 
 [[package]]
 name = "codex-config"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1877,7 +1877,7 @@ dependencies = [
 [[package]]
 name = "codex-connectors"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "codex-app-server-protocol",
@@ -1891,7 +1891,7 @@ dependencies = [
 [[package]]
 name = "codex-context-fragments"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-protocol",
  "codex-utils-string",
@@ -1900,7 +1900,7 @@ dependencies = [
 [[package]]
 name = "codex-core"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2000,7 +2000,7 @@ dependencies = [
 [[package]]
 name = "codex-core-plugins"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2038,7 +2038,7 @@ dependencies = [
 [[package]]
 name = "codex-core-skills"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "codex-analytics",
@@ -2069,7 +2069,7 @@ dependencies = [
 [[package]]
 name = "codex-exec-server"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2102,7 +2102,7 @@ dependencies = [
 [[package]]
 name = "codex-execpolicy"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "clap",
@@ -2118,7 +2118,7 @@ dependencies = [
 [[package]]
 name = "codex-experimental-api-macros"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2128,7 +2128,7 @@ dependencies = [
 [[package]]
 name = "codex-extension-api"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "codex-context-fragments",
@@ -2139,7 +2139,7 @@ dependencies = [
 [[package]]
 name = "codex-features"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-otel",
  "codex-protocol",
@@ -2152,7 +2152,7 @@ dependencies = [
 [[package]]
 name = "codex-feedback"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "codex-login",
@@ -2165,7 +2165,7 @@ dependencies = [
 [[package]]
 name = "codex-file-search"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "clap",
@@ -2180,7 +2180,7 @@ dependencies = [
 [[package]]
 name = "codex-file-system"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "codex-protocol",
@@ -2191,7 +2191,7 @@ dependencies = [
 [[package]]
 name = "codex-git-utils"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2215,7 +2215,7 @@ dependencies = [
 [[package]]
 name = "codex-hooks"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2237,7 +2237,7 @@ dependencies = [
 [[package]]
 name = "codex-install-context"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
@@ -2246,7 +2246,7 @@ dependencies = [
 [[package]]
 name = "codex-keyring-store"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "keyring",
  "tracing",
@@ -2255,7 +2255,7 @@ dependencies = [
 [[package]]
 name = "codex-linux-sandbox"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "clap",
  "codex-install-context",
@@ -2276,7 +2276,7 @@ dependencies = [
 [[package]]
 name = "codex-login"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "base64",
@@ -2310,7 +2310,7 @@ dependencies = [
 [[package]]
 name = "codex-mcp"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2341,7 +2341,7 @@ dependencies = [
 [[package]]
 name = "codex-mcp-server"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "codex-arg0",
@@ -2366,7 +2366,7 @@ dependencies = [
 [[package]]
 name = "codex-memories-read"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-protocol",
  "codex-shell-command",
@@ -2376,7 +2376,7 @@ dependencies = [
 [[package]]
 name = "codex-model-provider"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "codex-agent-identity",
@@ -2398,7 +2398,7 @@ dependencies = [
 [[package]]
 name = "codex-model-provider-info"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-api",
  "codex-app-server-protocol",
@@ -2411,7 +2411,7 @@ dependencies = [
 [[package]]
 name = "codex-models-manager"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2431,7 +2431,7 @@ dependencies = [
 [[package]]
 name = "codex-network-proxy"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2464,7 +2464,7 @@ dependencies = [
 [[package]]
 name = "codex-otel"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "chrono",
  "codex-api",
@@ -2496,7 +2496,7 @@ dependencies = [
 [[package]]
 name = "codex-plugin"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-config",
  "codex-utils-absolute-path",
@@ -2507,7 +2507,7 @@ dependencies = [
 [[package]]
 name = "codex-process-hardening"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "libc",
 ]
@@ -2515,7 +2515,7 @@ dependencies = [
 [[package]]
 name = "codex-prompts"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "codex-context-fragments",
@@ -2529,7 +2529,7 @@ dependencies = [
 [[package]]
 name = "codex-protocol"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "chardetng",
  "chrono",
@@ -2566,7 +2566,7 @@ dependencies = [
 [[package]]
 name = "codex-response-debug-context"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "base64",
  "codex-api",
@@ -2577,7 +2577,7 @@ dependencies = [
 [[package]]
 name = "codex-rmcp-client"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "axum",
@@ -2612,7 +2612,7 @@ dependencies = [
 [[package]]
 name = "codex-rollout"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2638,7 +2638,7 @@ dependencies = [
 [[package]]
 name = "codex-rollout-trace"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "codex-code-mode",
@@ -2653,7 +2653,7 @@ dependencies = [
 [[package]]
 name = "codex-sandboxing"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-network-proxy",
  "codex-protocol",
@@ -2670,7 +2670,7 @@ dependencies = [
 [[package]]
 name = "codex-shell-command"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "base64",
  "codex-protocol",
@@ -2689,7 +2689,7 @@ dependencies = [
 [[package]]
 name = "codex-shell-escalation"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2709,7 +2709,7 @@ dependencies = [
 [[package]]
 name = "codex-skills"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-utils-absolute-path",
  "include_dir",
@@ -2719,7 +2719,7 @@ dependencies = [
 [[package]]
 name = "codex-state"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2741,7 +2741,7 @@ dependencies = [
 [[package]]
 name = "codex-terminal-detection"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "tracing",
 ]
@@ -2749,7 +2749,7 @@ dependencies = [
 [[package]]
 name = "codex-thread-store"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2769,7 +2769,7 @@ dependencies = [
 [[package]]
 name = "codex-tools"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "async-trait",
  "codex-app-server-protocol",
@@ -2792,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-absolute-path"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "dirs",
  "dunce",
@@ -2804,7 +2804,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-approval-presets"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-protocol",
 ]
@@ -2812,7 +2812,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-cache"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "lru",
  "sha1 0.10.6",
@@ -2822,7 +2822,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-cli"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "clap",
  "codex-protocol",
@@ -2834,7 +2834,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-home-dir"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-utils-absolute-path",
  "dirs",
@@ -2843,7 +2843,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-image"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "base64",
  "codex-utils-cache",
@@ -2856,7 +2856,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-json-to-toml"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "serde_json",
  "toml",
@@ -2865,7 +2865,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-output-truncation"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-protocol",
  "codex-utils-string",
@@ -2874,7 +2874,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-path"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-utils-absolute-path",
  "dunce",
@@ -2884,7 +2884,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-plugins"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "codex-exec-server",
  "codex-login",
@@ -2896,6 +2896,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-pty"
 version = "0.137.0"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "filedescriptor",
@@ -2911,7 +2912,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-rustls-provider"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "rustls",
 ]
@@ -2919,12 +2920,12 @@ dependencies = [
 [[package]]
 name = "codex-utils-stream-parser"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 
 [[package]]
 name = "codex-utils-string"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "regex-lite",
  "serde",
@@ -2934,12 +2935,12 @@ dependencies = [
 [[package]]
 name = "codex-utils-template"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 
 [[package]]
 name = "codex-windows-sandbox"
 version = "0.137.0"
-source = "git+https://github.com/openai/codex?tag=rust-v0.137.0#f221438b691b8f749d98f22077c93ebe01923fbe"
+source = "git+https://github.com/drama-crew/codex?branch=drama%2Fsummary-titles#c666ff47c1342c9b0383b1c0e41adb49039d059f"
 dependencies = [
  "anyhow",
  "base64",
@@ -12269,3 +12270,7 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[patch.unused]]
+name = "codex-utils-pty"
+version = "0.137.0"

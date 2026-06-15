@@ -1975,16 +1975,23 @@ impl PromptState {
             cwd,
             parsed_cmd,
             process_id: _,
+            summary,
         } = event;
         // Create a new tool call for the command execution
         let tool_call_id = ToolCallId::new(call_id.clone());
         let ParseCommandToolCall {
-            title,
+            mut title,
             file_extension,
             locations,
             terminal_output,
             kind,
         } = parse_command_tool_call(parsed_cmd, &cwd);
+        // Prefer the model-authored summary as the display title when present.
+        if let Some(s) = summary {
+            if !s.trim().is_empty() {
+                title = s;
+            }
+        }
 
         let active_command = ActiveCommand {
             tool_call_id: tool_call_id.clone(),
@@ -4760,6 +4767,7 @@ mod tests {
                                 source: Default::default(),
                                 interaction_input: None,
                                 started_at_ms: 0,
+                                summary: None,
                             }));
                             send(EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                                 call_id: "call-b".into(),
@@ -4773,6 +4781,7 @@ mod tests {
                                 source: Default::default(),
                                 interaction_input: None,
                                 started_at_ms: 0,
+                                summary: None,
                             }));
                             send(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                                 call_id: "call-a".into(),
