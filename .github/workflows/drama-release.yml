@@ -28,12 +28,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          # macOS：Apple Silicon 原生 arm64 + Intel 原生 x86_64（macos-14=arm64,
-          # macos-13=x86_64 都是 GitHub 托管 runner；desktop 客户端拉这两个）。
+          # macOS：只出 Apple Silicon arm64（desktop 客户端 electron-builder 仅打 arm64，
+          # 这是唯一被消费的 darwin 目标）。Intel x86_64(macos-13) 暂不做——GitHub Intel
+          # mac runner 稀缺易卡队列拖住 release，且当前无消费者；将来需要 Intel/universal
+          # 再加回 `- runner: macos-13 / target: x86_64-apple-darwin`。
           - runner: macos-14
             target: aarch64-apple-darwin
-          - runner: macos-13
-            target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
