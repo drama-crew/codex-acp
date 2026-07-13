@@ -43,8 +43,8 @@ use codex_protocol::{
     error::CodexErr,
     mcp::CallToolResult,
     models::{
-        ActivePermissionProfile, AdditionalPermissionProfile, PermissionProfile, ResponseItem,
-        WebSearchAction,
+        ActivePermissionProfile, AdditionalPermissionProfile,
+        BUILT_IN_PERMISSION_PROFILE_WORKSPACE, PermissionProfile, ResponseItem, WebSearchAction,
     },
     openai_models::{ModelPreset, ReasoningEffort},
     parse_command::ParsedCommand,
@@ -55,7 +55,8 @@ use codex_protocol::{
     protocol::{
         AgentMessageContentDeltaEvent, AgentMessageEvent, AgentReasoningEvent,
         AgentReasoningRawContentEvent, AgentReasoningSectionBreakEvent,
-        ApplyPatchApprovalRequestEvent, DynamicToolCallResponseEvent, ElicitationAction,
+        ApplyPatchApprovalRequestEvent, AskForApproval, DynamicToolCallResponseEvent,
+        ElicitationAction,
         ErrorEvent, Event, EventMsg, ExecApprovalRequestEvent, ExecCommandBeginEvent,
         ExecCommandEndEvent, ExecCommandOutputDeltaEvent, ExecCommandStatus, ExitedReviewModeEvent,
         FileChange, GuardianAssessmentEvent, GuardianAssessmentStatus, ImageGenerationBeginEvent,
@@ -111,25 +112,64 @@ impl ClientSender for AcpConnection {
     }
 }
 
-static APPROVAL_PRESETS: LazyLock<Vec<ApprovalPreset>> = LazyLock::new(builtin_approval_presets);
+/// drama-specific preset appended to the codex-core builtin presets: fully
+/// autonomous execution *inside the workspace sandbox* (as opposed to the
+/// builtin "full-access" preset, which is also `Never` but runs with no
+/// sandbox at all). We deliberately do not touch
+/// `codex_utils_approval_presets::builtin_approval_presets()` or the three
+/// builtin presets' semantics — this is purely additive.
+///
+/// `approval: Never` mirrors exactly what the desktop app already writes to
+/// `config.toml` at session-start time when the user starts a session in
+/// "auto" mode (`approval_policy = "never"` + `sandbox_mode =
+/// "workspace-write"`). Reusing `Never` here (rather than a `Granular`
+/// variant) keeps the runtime-switch path byte-for-byte equivalent to the
+/// already-audited startup path.
+fn workspace_full_auto_preset() -> ApprovalPreset {
+    ApprovalPreset {
+        id: "workspace-full-auto",
+        label: "Workspace Full Auto",
+        description: "Codex runs fully autonomously inside the workspace sandbox. \
+                       Escalation requests are auto-rejected instead of prompting.",
+        approval: AskForApproval::Never,
+        active_permission_profile: ActivePermissionProfile::new(
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+        ),
+        permission_profile: PermissionProfile::workspace_write(),
+    }
+}
+
+fn drama_approval_presets() -> Vec<ApprovalPreset> {
+    let mut presets = builtin_approval_presets();
+    presets.push(workspace_full_auto_preset());
+    presets
+}
+
+static APPROVAL_PRESETS: LazyLock<Vec<ApprovalPreset>> = LazyLock::new(drama_approval_presets);
 const INIT_COMMAND_PROMPT: &str = include_str!("./prompt_for_init_command.md");
 const CODEX_READ_ONLY_PROFILE_ID: &str = ":read-only";
 const CODEX_WORKSPACE_PROFILE_ID: &str = ":workspace";
 const CODEX_DANGER_NO_SANDBOX_PROFILE_ID: &str = ":danger-no-sandbox";
 
-fn session_mode_id_for_active_profile(profile_id: &str) -> Option<&'static str> {
+/// Session-mode ids that can resolve to the same active permission-profile
+/// id. `:workspace` is shared by both the builtin "auto" preset
+/// (`AskForApproval::OnRequest`) and the drama "workspace-full-auto" preset
+/// (`AskForApproval::Never`), so a profile-id lookup alone is ambiguous.
+/// Callers must further disambiguate by approval-policy discriminant (see
+/// `mode_id_if_approval_matches`).
+fn session_mode_ids_for_active_profile(profile_id: &str) -> &'static [&'static str] {
     match profile_id {
-        CODEX_READ_ONLY_PROFILE_ID => Some("read-only"),
-        CODEX_WORKSPACE_PROFILE_ID => Some("auto"),
-        CODEX_DANGER_NO_SANDBOX_PROFILE_ID => Some("full-access"),
-        _ => None,
+        CODEX_READ_ONLY_PROFILE_ID => &["read-only"],
+        CODEX_WORKSPACE_PROFILE_ID => &["auto", "workspace-full-auto"],
+        CODEX_DANGER_NO_SANDBOX_PROFILE_ID => &["full-access"],
+        _ => &[],
     }
 }
 
 fn active_profile_id_for_session_mode(mode_id: &str) -> Option<&'static str> {
     match mode_id {
         "read-only" => Some(CODEX_READ_ONLY_PROFILE_ID),
-        "auto" => Some(CODEX_WORKSPACE_PROFILE_ID),
+        "auto" | "workspace-full-auto" => Some(CODEX_WORKSPACE_PROFILE_ID),
         "full-access" => Some(CODEX_DANGER_NO_SANDBOX_PROFILE_ID),
         _ => None,
     }
@@ -158,16 +198,25 @@ fn untrusted_read_only_mode_id(config: &Config) -> Option<SessionModeId> {
         .then(|| SessionModeId::new("read-only"))
 }
 
-fn semantic_session_mode_id_for_permission_profile(config: &Config) -> Option<&'static str> {
+/// Same ambiguity as `session_mode_ids_for_active_profile`: the "workspace"
+/// family of semantic-permission-profile matches now covers both "auto" and
+/// "workspace-full-auto" (they use an identical `PermissionProfile`), so this
+/// returns every candidate id and leaves approval-discriminant
+/// disambiguation to the caller.
+fn semantic_session_mode_ids_for_permission_profile(config: &Config) -> &'static [&'static str] {
     let permission_profile = config.permissions.permission_profile();
 
     match permission_profile {
         PermissionProfile::Managed { .. } => {
-            let workspace_preset = APPROVAL_PRESETS.iter().find(|preset| preset.id == "auto")?;
+            let Some(workspace_preset) =
+                APPROVAL_PRESETS.iter().find(|preset| preset.id == "auto")
+            else {
+                return &[];
+            };
             if permission_profile.network_sandbox_policy()
                 != workspace_preset.permission_profile.network_sandbox_policy()
             {
-                return None;
+                return &[];
             }
 
             let file_system = permission_profile.file_system_sandbox_policy();
@@ -176,20 +225,21 @@ fn semantic_session_mode_id_for_permission_profile(config: &Config) -> Option<&'
                 && !file_system.has_full_disk_write_access()
                 && file_system.can_write_path_with_cwd(cwd, cwd)
             {
-                Some("auto")
+                &["auto", "workspace-full-auto"]
             } else {
-                None
+                &[]
             }
         }
-        PermissionProfile::Disabled => Some("full-access"),
-        PermissionProfile::External { .. } => None,
+        PermissionProfile::Disabled => &["full-access"],
+        PermissionProfile::External { .. } => &[],
     }
 }
 
 fn current_session_mode_id(config: &Config) -> Option<SessionModeId> {
     if let Some(active_profile) = config.permissions.active_permission_profile().as_ref() {
-        return session_mode_id_for_active_profile(&active_profile.id)
-            .and_then(|mode_id| mode_id_if_approval_matches(mode_id, config))
+        return session_mode_ids_for_active_profile(&active_profile.id)
+            .iter()
+            .find_map(|&mode_id| mode_id_if_approval_matches(mode_id, config))
             .or_else(|| untrusted_read_only_mode_id(config));
     }
 
@@ -200,13 +250,18 @@ fn current_session_mode_id(config: &Config) -> Option<SessionModeId> {
         return Some(SessionModeId::new(preset.id));
     }
 
-    semantic_session_mode_id_for_permission_profile(config)
-        .and_then(|mode_id| mode_id_if_approval_matches(mode_id, config))
+    semantic_session_mode_ids_for_permission_profile(config)
+        .iter()
+        .find_map(|&mode_id| mode_id_if_approval_matches(mode_id, config))
         .or_else(|| untrusted_read_only_mode_id(config))
 }
 
 fn mode_trusts_project(mode_id: &str) -> bool {
-    matches!(mode_id, "auto" | "full-access")
+    // "workspace-full-auto" mirrors "auto": both keep the workspace-write
+    // sandbox in place (only the approval policy differs), so trusting the
+    // project on switch is the same call codex-core already makes for
+    // "auto".
+    matches!(mode_id, "auto" | "workspace-full-auto" | "full-access")
 }
 
 /// Trait for abstracting over the `CodexThread` to make testing easier.
@@ -4118,7 +4173,10 @@ mod tests {
     use std::time::Duration;
 
     use agent_client_protocol::schema::{RequestPermissionResponse, TextContent};
-    use codex_core::{config::ConfigOverrides, test_support::all_model_presets};
+    use codex_core::{
+        config::{ConfigOverrides, PermissionProfileSnapshot},
+        test_support::all_model_presets,
+    };
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::{ThreadId, protocol::ThreadGoal};
     use tokio::sync::{Mutex, Notify, mpsc::UnboundedSender};
@@ -4374,7 +4432,103 @@ mod tests {
     fn read_only_mode_does_not_trust_project() {
         assert!(!mode_trusts_project("read-only"));
         assert!(mode_trusts_project("auto"));
+        assert!(mode_trusts_project("workspace-full-auto"));
         assert!(mode_trusts_project("full-access"));
+    }
+
+    #[test]
+    fn approval_presets_include_workspace_full_auto_without_altering_builtins() {
+        let builtin = builtin_approval_presets();
+        assert_eq!(builtin.len(), 3, "builtin presets must stay untouched");
+
+        assert_eq!(APPROVAL_PRESETS.len(), 4);
+
+        // The three builtin presets are present, unchanged, and in order.
+        for (drama_preset, builtin_preset) in APPROVAL_PRESETS.iter().zip(builtin.iter()) {
+            assert_eq!(drama_preset.id, builtin_preset.id);
+            assert_eq!(drama_preset.label, builtin_preset.label);
+            assert_eq!(drama_preset.description, builtin_preset.description);
+            assert_eq!(
+                std::mem::discriminant(&drama_preset.approval),
+                std::mem::discriminant(&builtin_preset.approval)
+            );
+            assert_eq!(
+                drama_preset.active_permission_profile,
+                builtin_preset.active_permission_profile
+            );
+            assert_eq!(drama_preset.permission_profile, builtin_preset.permission_profile);
+        }
+
+        let preset = APPROVAL_PRESETS
+            .iter()
+            .find(|preset| preset.id == "workspace-full-auto")
+            .expect("workspace-full-auto preset should be registered");
+        assert!(matches!(preset.approval, AskForApproval::Never));
+        assert_eq!(preset.permission_profile, PermissionProfile::workspace_write());
+        assert_eq!(
+            preset.active_permission_profile,
+            ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
+        );
+    }
+
+    #[test]
+    fn handle_set_mode_resolves_workspace_full_auto_preset() {
+        let preset = APPROVAL_PRESETS
+            .iter()
+            .find(|preset| preset.id == "workspace-full-auto")
+            .expect("handle_set_mode looks up APPROVAL_PRESETS by id");
+        assert_eq!(
+            active_profile_id_for_session_mode(preset.id),
+            Some(CODEX_WORKSPACE_PROFILE_ID)
+        );
+    }
+
+    #[tokio::test]
+    async fn current_session_mode_id_disambiguates_workspace_full_auto_from_auto()
+    -> anyhow::Result<()> {
+        let mut config = Config::load_with_cli_overrides_and_harness_overrides(
+            vec![],
+            ConfigOverrides::default(),
+        )
+        .await?;
+
+        // :workspace + OnRequest -> "auto" (regression: must not become
+        // ambiguous now that a second preset shares the same profile).
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        config
+            .permissions
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+                PermissionProfile::workspace_write(),
+                ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE),
+            ))?;
+        let mode_id = current_session_mode_id(&config).expect("mode should be recognized");
+        assert_eq!(mode_id.0.as_ref(), "auto");
+
+        // :workspace + Never -> "workspace-full-auto".
+        config.permissions.approval_policy.set(AskForApproval::Never)?;
+        config
+            .permissions
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+                PermissionProfile::workspace_write(),
+                ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE),
+            ))?;
+        let mode_id = current_session_mode_id(&config).expect("mode should be recognized");
+        assert_eq!(mode_id.0.as_ref(), "workspace-full-auto");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn available_modes_include_all_four_ids() -> anyhow::Result<()> {
+        let ids: Vec<&str> = APPROVAL_PRESETS.iter().map(|preset| preset.id).collect();
+        assert_eq!(
+            ids,
+            vec!["read-only", "auto", "full-access", "workspace-full-auto"]
+        );
+        Ok(())
     }
 
     #[tokio::test]
