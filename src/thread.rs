@@ -44,12 +44,14 @@ use codex_protocol::{
     mcp::CallToolResult,
     models::{
         ActivePermissionProfile, AdditionalPermissionProfile,
-        BUILT_IN_PERMISSION_PROFILE_WORKSPACE, PermissionProfile, ResponseItem, WebSearchAction,
+        BUILT_IN_PERMISSION_PROFILE_WORKSPACE, ManagedFileSystemPermissions, PermissionProfile,
+        ResponseItem, WebSearchAction,
     },
     openai_models::{ModelPreset, ReasoningEffort},
     parse_command::ParsedCommand,
     permissions::{
-        FileSystemAccessMode, FileSystemPath, FileSystemSandboxEntry, FileSystemSpecialPath,
+        FileSystemAccessMode, FileSystemPath, FileSystemSandboxEntry, FileSystemSandboxKind,
+        FileSystemSpecialPath, NetworkSandboxPolicy,
     },
     plan_tool::{PlanItemArg, StepStatus, UpdatePlanArgs},
     protocol::{
@@ -147,6 +149,177 @@ fn drama_approval_presets() -> Vec<ApprovalPreset> {
 
 static APPROVAL_PRESETS: LazyLock<Vec<ApprovalPreset>> = LazyLock::new(drama_approval_presets);
 const INIT_COMMAND_PROMPT: &str = include_str!("./prompt_for_init_command.md");
+
+/// Boot-time `[sandbox_workspace_write]` customizations, captured once at
+/// `Thread`/`ThreadActor` construction — *before* any `session/set_mode`
+/// call can overwrite `config.permissions`'s permission profile with a
+/// preset's pristine one.
+///
+/// Desktop boots codex with `sandbox_mode = "workspace-write"` plus a
+/// `[sandbox_workspace_write]` table (`writable_roots`, `network_access`,
+/// `exclude_tmpdir_env_var`, `exclude_slash_tmp`). codex-core's
+/// `ConfigToml::derive_permission_profile` (the path taken when no
+/// `[permissions]` table selects a named profile — exactly the desktop
+/// case) bakes those knobs directly into the *initial*
+/// `config.permissions.permission_profile()` via
+/// `PermissionProfile::workspace_write_with(writable_roots, ...)`: the extra
+/// roots become literal writable-path entries and `network_access` becomes
+/// `NetworkSandboxPolicy::Enabled`.
+///
+/// Both of codex-acp's workspace-write-family presets ("auto" and
+/// "workspace-full-auto", see `workspace_full_auto_preset`) carry a *fresh*
+/// `PermissionProfile::workspace_write()` — no extra roots, network
+/// `Restricted`. `handle_set_mode` used to apply that pristine profile
+/// as-is, so the very first `session/set_mode` call after boot silently
+/// dropped the user's external writable directories and downgraded network
+/// access. `build_profile_for_preset` merges these captured boot extras back
+/// in for that preset family so switching approval modes never narrows what
+/// `config.toml` granted at startup.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct BootWorkspaceWriteExtras {
+    /// Extra literal writable-path entries from
+    /// `[sandbox_workspace_write].writable_roots`, beyond what a pristine
+    /// `PermissionProfile::workspace_write()` already grants (the workspace
+    /// cwd itself is covered by the symbolic `:workspace_roots` entry, not a
+    /// literal path).
+    extra_write_entries: Vec<FileSystemSandboxEntry>,
+    /// `[sandbox_workspace_write].network_access` translated to its runtime
+    /// representation.
+    network: NetworkSandboxPolicy,
+    exclude_tmpdir_env_var: bool,
+    exclude_slash_tmp: bool,
+}
+
+/// Extracts `BootWorkspaceWriteExtras` from a freshly loaded `Config`'s
+/// permission profile, i.e. before any `session/set_mode` call has had a
+/// chance to overwrite it with a preset's pristine profile.
+///
+/// Returns `BootWorkspaceWriteExtras::default()` (no-op extras) when the
+/// boot profile isn't workspace-write-shaped at all (e.g. the session
+/// booted read-only or with `sandbox_mode = "danger-full-access"`) — there
+/// is no writable-roots/network concept to carry forward from those, and in
+/// particular `PermissionProfile::Disabled`'s `network_sandbox_policy()`
+/// reports `Enabled` unconditionally (no sandbox at all), which must not
+/// leak into a later "auto"/"workspace-full-auto" merge.
+fn capture_boot_workspace_write_extras(config: &Config) -> BootWorkspaceWriteExtras {
+    let profile = config.permissions.permission_profile();
+    if !matches!(profile, PermissionProfile::Managed { .. }) {
+        return BootWorkspaceWriteExtras::default();
+    }
+
+    let file_system = profile.file_system_sandbox_policy();
+    if file_system.kind != FileSystemSandboxKind::Restricted {
+        return BootWorkspaceWriteExtras::default();
+    }
+
+    // Workspace-write-shaped profiles are identified by their symbolic
+    // `:workspace_roots` write entry (see
+    // `FileSystemSandboxPolicy::workspace_write`). `read_only()` is also
+    // `Managed`/`Restricted` but has no such entry — it has nothing to
+    // contribute to a later workspace-write merge, and mis-capturing it
+    // would set both tmp-exclude flags (read-only has no tmp entries).
+    let is_workspace_write_shaped = file_system.entries.iter().any(|entry| {
+        matches!(
+            &entry.path,
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::ProjectRoots { .. }
+            }
+        ) && entry.access == FileSystemAccessMode::Write
+    });
+    if !is_workspace_write_shaped {
+        return BootWorkspaceWriteExtras::default();
+    }
+
+    let extra_write_entries = file_system
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.path, FileSystemPath::Path { .. })
+                && entry.access == FileSystemAccessMode::Write
+        })
+        .cloned()
+        .collect();
+    let has_special = |value: FileSystemSpecialPath| {
+        file_system
+            .entries
+            .iter()
+            .any(|entry| matches!(&entry.path, FileSystemPath::Special { value: v } if v == &value))
+    };
+
+    BootWorkspaceWriteExtras {
+        extra_write_entries,
+        network: profile.network_sandbox_policy(),
+        exclude_tmpdir_env_var: !has_special(FileSystemSpecialPath::Tmpdir),
+        exclude_slash_tmp: !has_special(FileSystemSpecialPath::SlashTmp),
+    }
+}
+
+/// Builds the `PermissionProfile` to apply for a given `session/set_mode`
+/// preset selection.
+///
+/// For the workspace-write family of presets ("auto", "workspace-full-auto")
+/// the boot-time `[sandbox_workspace_write]` extras captured by
+/// `capture_boot_workspace_write_extras` are merged back in, so switching
+/// modes never narrows what `config.toml` granted at startup (see
+/// `BootWorkspaceWriteExtras`). We always merge from that boot-time
+/// snapshot — never from the *current* config's permission profile — so a
+/// read-only -> auto transition doesn't accidentally inherit read-only's
+/// restrictions, and a second auto -> workspace-full-auto -> auto round trip
+/// doesn't drift.
+///
+/// Every other preset ("read-only", "full-access") is returned pristine,
+/// unmodified — those intentionally change the sandbox shape, and merging
+/// writable-roots/network extras into a read-only or fully-disabled sandbox
+/// would be nonsensical.
+///
+/// When `boot_extras` is `BootWorkspaceWriteExtras::default()` (no boot
+/// customizations to preserve), every mutation below is a no-op and this
+/// reproduces `preset.permission_profile` byte-for-byte.
+///
+/// The merge mutates a clone of the pristine preset profile rather than
+/// calling `PermissionProfile::workspace_write_with(...)` so the result is
+/// built from exactly the entry set the preset carries; the mutations mirror
+/// `workspace_write_with`'s own semantics (drop `:slash_tmp`/`:tmpdir` when
+/// excluded, append literal writable roots at the end, set network).
+fn build_profile_for_preset(
+    preset: &ApprovalPreset,
+    boot_extras: &BootWorkspaceWriteExtras,
+) -> PermissionProfile {
+    let mut profile = preset.permission_profile.clone();
+    if !matches!(preset.id, "auto" | "workspace-full-auto") {
+        return profile;
+    }
+
+    if let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        network,
+    } = &mut profile
+    {
+        if boot_extras.exclude_slash_tmp {
+            entries.retain(|entry| {
+                !matches!(
+                    &entry.path,
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::SlashTmp
+                    }
+                )
+            });
+        }
+        if boot_extras.exclude_tmpdir_env_var {
+            entries.retain(|entry| {
+                !matches!(
+                    &entry.path,
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Tmpdir
+                    }
+                )
+            });
+        }
+        entries.extend(boot_extras.extra_write_entries.iter().cloned());
+        *network = boot_extras.network;
+    }
+    profile
+}
 const CODEX_READ_ONLY_PROFILE_ID: &str = ":read-only";
 const CODEX_WORKSPACE_PROFILE_ID: &str = ":workspace";
 const CODEX_DANGER_NO_SANDBOX_PROFILE_ID: &str = ":danger-no-sandbox";
@@ -208,17 +381,20 @@ fn semantic_session_mode_ids_for_permission_profile(config: &Config) -> &'static
 
     match permission_profile {
         PermissionProfile::Managed { .. } => {
-            let Some(workspace_preset) =
-                APPROVAL_PRESETS.iter().find(|preset| preset.id == "auto")
-            else {
-                return &[];
-            };
-            if permission_profile.network_sandbox_policy()
-                != workspace_preset.permission_profile.network_sandbox_policy()
-            {
-                return &[];
-            }
-
+            // Deliberately do NOT also require `network_sandbox_policy()`
+            // equality against the "auto" preset's pristine profile here.
+            // `[sandbox_workspace_write].network_access = true` in the
+            // boot-time config.toml (or a `session/set_mode` merge that
+            // preserves it, see `build_profile_for_preset`) legitimately
+            // produces a `NetworkSandboxPolicy::Enabled` workspace-write
+            // profile that is still, semantically, the
+            // "auto"/"workspace-full-auto" family — network access is an
+            // orthogonal knob of that family, not a different sandbox
+            // shape. The filesystem shape check below (full disk *read*,
+            // no full disk *write*, but cwd itself writable) is already
+            // sufficient to disambiguate: `read_only()` fails the
+            // cwd-writable check, and a fully-open `Managed` profile fails
+            // the "no full disk write" check.
             let file_system = permission_profile.file_system_sandbox_policy();
             let cwd = config.cwd.as_path();
             if file_system.has_full_disk_read_access()
@@ -2821,6 +2997,12 @@ struct ThreadActor<A> {
     resolution_rx: mpsc::UnboundedReceiver<ThreadMessage>,
     /// Last config options state we emitted to the client, used for deduping updates.
     last_sent_config_options: Option<Vec<SessionConfigOption>>,
+    /// Boot-time `[sandbox_workspace_write]` writable-roots/network extras,
+    /// captured once from `config` before any `session/set_mode` call can
+    /// overwrite `config.permissions`'s permission profile with a preset's
+    /// pristine one. See `BootWorkspaceWriteExtras` and
+    /// `build_profile_for_preset`.
+    boot_workspace_write_extras: BootWorkspaceWriteExtras,
 }
 
 impl<A: Auth> ThreadActor<A> {
@@ -2835,6 +3017,7 @@ impl<A: Auth> ThreadActor<A> {
         resolution_tx: mpsc::UnboundedSender<ThreadMessage>,
         resolution_rx: mpsc::UnboundedReceiver<ThreadMessage>,
     ) -> Self {
+        let boot_workspace_write_extras = capture_boot_workspace_write_extras(&config);
         Self {
             auth,
             client,
@@ -2846,6 +3029,7 @@ impl<A: Auth> ThreadActor<A> {
             message_rx,
             resolution_rx,
             last_sent_config_options: None,
+            boot_workspace_write_extras,
         }
     }
 
@@ -3349,11 +3533,20 @@ impl<A: Auth> ThreadActor<A> {
             .find(|preset| mode.0.as_ref() == preset.id)
             .ok_or_else(Error::invalid_params)?;
 
+        // For "auto"/"workspace-full-auto" this re-merges the boot-time
+        // `[sandbox_workspace_write]` extras (external writable roots,
+        // network access) captured at `ThreadActor::new` time, so switching
+        // modes doesn't silently narrow the sandbox `config.toml` granted at
+        // startup. Every other preset is returned pristine. See
+        // `build_profile_for_preset`.
+        let permission_profile =
+            build_profile_for_preset(preset, &self.boot_workspace_write_extras);
+
         self.thread
             .submit(Op::ThreadSettings {
                 thread_settings: ThreadSettingsOverrides {
                     approval_policy: Some(preset.approval),
-                    permission_profile: Some(preset.permission_profile.clone()),
+                    permission_profile: Some(permission_profile.clone()),
                     active_permission_profile: active_profile_id_for_session_mode(preset.id)
                         .map(ActivePermissionProfile::new),
                     ..Default::default()
@@ -3369,7 +3562,7 @@ impl<A: Auth> ThreadActor<A> {
             .map_err(|e| Error::from(anyhow::anyhow!(e)))?;
         self.config
             .permissions
-            .set_permission_profile(preset.permission_profile.clone())
+            .set_permission_profile(permission_profile)
             .map_err(|e| Error::from(anyhow::anyhow!(e)))?;
 
         if mode_trusts_project(preset.id) {
@@ -4572,6 +4765,497 @@ mod tests {
         Ok(())
     }
 
+    // --- set_mode boot-writable-roots/network preservation (2026-07-13 fix) ---
+    //
+    // Desktop boots codex with `sandbox_mode = "workspace-write"` +
+    // `[sandbox_workspace_write] writable_roots = [...]` + `network_access =
+    // true` in config.toml. `codex_core`'s `derive_permission_profile` bakes
+    // those extras directly into the *boot-time*
+    // `config.permissions.permission_profile()` as literal writable-root
+    // entries plus `NetworkSandboxPolicy::Enabled`. Before this fix,
+    // `handle_set_mode("auto" | "workspace-full-auto")` replaced that rich
+    // boot profile with a pristine `PermissionProfile::workspace_write()`
+    // (no extra roots, `NetworkSandboxPolicy::Restricted`), silently
+    // dropping the user's external writable directories and downgrading
+    // network access on the very first `session/set_mode` call.
+
+    /// Builds a `Config` whose boot-time permission profile mirrors what
+    /// `codex_core::config::ConfigToml::derive_permission_profile` produces
+    /// for `sandbox_mode = "workspace-write"` +
+    /// `[sandbox_workspace_write] writable_roots = [...]` +
+    /// `network_access = <network_enabled>` — i.e. a
+    /// `PermissionProfile::workspace_write_with(extra_roots, ...)` with the
+    /// extras baked in as literal entries, exactly as the real config loader
+    /// would leave it (see `permission_profile_override_preserves_configured_network_policy_without_starting_proxy`-style
+    /// tests in codex-core for the upstream mechanism this mirrors).
+    /// Literal writable-path entry for `path`, as codex-core's
+    /// `derive_permission_profile` produces for each
+    /// `[sandbox_workspace_write].writable_roots` element.
+    fn write_entry(path: PathBuf) -> FileSystemSandboxEntry {
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: path.try_into().expect("absolute path"),
+            },
+            access: FileSystemAccessMode::Write,
+        }
+    }
+
+    /// Boot-shaped workspace-write profile: pristine `workspace_write()`
+    /// with the given extra literal write entries appended and the network
+    /// policy applied — the same shape codex-core's
+    /// `derive_permission_profile` produces for `sandbox_mode =
+    /// "workspace-write"` + a `[sandbox_workspace_write]` table.
+    fn boot_workspace_write_profile(
+        extra_entries: &[FileSystemSandboxEntry],
+        network_enabled: bool,
+    ) -> PermissionProfile {
+        let mut profile = PermissionProfile::workspace_write();
+        let PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+            network,
+        } = &mut profile
+        else {
+            panic!("workspace_write() must be Managed/Restricted");
+        };
+        entries.extend(extra_entries.iter().cloned());
+        if network_enabled {
+            *network = NetworkSandboxPolicy::Enabled;
+        }
+        profile
+    }
+
+    async fn config_with_boot_workspace_write_extras(
+        extra_entries: &[FileSystemSandboxEntry],
+        network_enabled: bool,
+    ) -> anyhow::Result<Config> {
+        let mut config = Config::load_with_cli_overrides_and_harness_overrides(
+            vec![],
+            ConfigOverrides::default(),
+        )
+        .await?;
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        config
+            .permissions
+            .set_permission_profile(boot_workspace_write_profile(
+                extra_entries,
+                network_enabled,
+            ))?;
+        Ok(config)
+    }
+
+    fn extra_root_for(config: &Config, name: &str) -> PathBuf {
+        config.codex_home.as_path().join(name)
+    }
+
+    fn has_write_entry_for(profile: &PermissionProfile, expected: &Path) -> bool {
+        profile.file_system_sandbox_policy().entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path.as_path() == expected)
+        })
+    }
+
+    #[tokio::test]
+    async fn handle_set_mode_auto_preserves_boot_writable_roots_and_network()
+    -> anyhow::Result<()> {
+        let config = config_with_boot_workspace_write_extras(&[], true).await?;
+        let extra_root = extra_root_for(&config, "external-project");
+        let config =
+            config_with_boot_workspace_write_extras(&[write_entry(extra_root.clone())], true)
+                .await?;
+
+        let session_id = SessionId::new("test");
+        let client = Arc::new(StubClient::new());
+        let session_client =
+            SessionClient::with_client(session_id.clone(), client.clone(), Arc::default());
+        let conversation = Arc::new(StubCodexThread::new());
+        let models_manager = Arc::new(StubModelsManager);
+        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (resolution_tx, resolution_rx) = tokio::sync::mpsc::unbounded_channel();
+        let actor = ThreadActor::new(
+            StubAuth,
+            session_client,
+            conversation.clone(),
+            models_manager,
+            config,
+            message_rx,
+            resolution_tx,
+            resolution_rx,
+        );
+        let handle = tokio::spawn(actor.spawn());
+        let thread = Thread {
+            thread: conversation.clone(),
+            message_tx,
+            _handle: handle,
+        };
+
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        thread.message_tx.send(ThreadMessage::SetMode {
+            mode: SessionModeId::new("auto"),
+            response_tx,
+        })?;
+        tokio::time::timeout(Duration::from_millis(200), response_rx).await???;
+
+        let ops = conversation.ops.lock().unwrap();
+        let Some(Op::ThreadSettings { thread_settings }) = ops
+            .iter()
+            .rev()
+            .find(|op| matches!(op, Op::ThreadSettings { .. }))
+        else {
+            panic!("expected a submitted Op::ThreadSettings, got: {ops:?}");
+        };
+        let permission_profile = thread_settings
+            .permission_profile
+            .as_ref()
+            .expect("set_mode must submit a permission_profile override");
+
+        assert_eq!(
+            permission_profile.network_sandbox_policy(),
+            NetworkSandboxPolicy::Enabled,
+            "boot network_access=true must survive session/set_mode(\"auto\")"
+        );
+        assert!(
+            has_write_entry_for(permission_profile, &extra_root),
+            "boot writable_roots extra must survive session/set_mode(\"auto\"): {permission_profile:?}"
+        );
+
+        drop(thread);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_set_mode_workspace_full_auto_preserves_boot_writable_roots_and_network()
+    -> anyhow::Result<()> {
+        let config = config_with_boot_workspace_write_extras(&[], true).await?;
+        let extra_root = extra_root_for(&config, "external-project");
+        let config =
+            config_with_boot_workspace_write_extras(&[write_entry(extra_root.clone())], true)
+                .await?;
+
+        let session_id = SessionId::new("test");
+        let client = Arc::new(StubClient::new());
+        let session_client =
+            SessionClient::with_client(session_id.clone(), client.clone(), Arc::default());
+        let conversation = Arc::new(StubCodexThread::new());
+        let models_manager = Arc::new(StubModelsManager);
+        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (resolution_tx, resolution_rx) = tokio::sync::mpsc::unbounded_channel();
+        let actor = ThreadActor::new(
+            StubAuth,
+            session_client,
+            conversation.clone(),
+            models_manager,
+            config,
+            message_rx,
+            resolution_tx,
+            resolution_rx,
+        );
+        let handle = tokio::spawn(actor.spawn());
+        let thread = Thread {
+            thread: conversation.clone(),
+            message_tx,
+            _handle: handle,
+        };
+
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        thread.message_tx.send(ThreadMessage::SetMode {
+            mode: SessionModeId::new("workspace-full-auto"),
+            response_tx,
+        })?;
+        tokio::time::timeout(Duration::from_millis(200), response_rx).await???;
+
+        let ops = conversation.ops.lock().unwrap();
+        let Some(Op::ThreadSettings { thread_settings }) = ops
+            .iter()
+            .rev()
+            .find(|op| matches!(op, Op::ThreadSettings { .. }))
+        else {
+            panic!("expected a submitted Op::ThreadSettings, got: {ops:?}");
+        };
+        let permission_profile = thread_settings
+            .permission_profile
+            .as_ref()
+            .expect("set_mode must submit a permission_profile override");
+
+        assert_eq!(
+            permission_profile.network_sandbox_policy(),
+            NetworkSandboxPolicy::Enabled,
+            "boot network_access=true must survive session/set_mode(\"workspace-full-auto\")"
+        );
+        assert!(
+            has_write_entry_for(permission_profile, &extra_root),
+            "boot writable_roots extra must survive session/set_mode(\"workspace-full-auto\"): {permission_profile:?}"
+        );
+
+        drop(thread);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_set_mode_read_only_ignores_boot_workspace_write_extras() -> anyhow::Result<()>
+    {
+        let config = config_with_boot_workspace_write_extras(&[], true).await?;
+        let extra_root = extra_root_for(&config, "external-project");
+        let config =
+            config_with_boot_workspace_write_extras(&[write_entry(extra_root)], true).await?;
+
+        let session_id = SessionId::new("test");
+        let client = Arc::new(StubClient::new());
+        let session_client =
+            SessionClient::with_client(session_id.clone(), client.clone(), Arc::default());
+        let conversation = Arc::new(StubCodexThread::new());
+        let models_manager = Arc::new(StubModelsManager);
+        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (resolution_tx, resolution_rx) = tokio::sync::mpsc::unbounded_channel();
+        let actor = ThreadActor::new(
+            StubAuth,
+            session_client,
+            conversation.clone(),
+            models_manager,
+            config,
+            message_rx,
+            resolution_tx,
+            resolution_rx,
+        );
+        let handle = tokio::spawn(actor.spawn());
+        let thread = Thread {
+            thread: conversation.clone(),
+            message_tx,
+            _handle: handle,
+        };
+
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        thread.message_tx.send(ThreadMessage::SetMode {
+            mode: SessionModeId::new("read-only"),
+            response_tx,
+        })?;
+        tokio::time::timeout(Duration::from_millis(200), response_rx).await???;
+
+        let ops = conversation.ops.lock().unwrap();
+        let Some(Op::ThreadSettings { thread_settings }) = ops
+            .iter()
+            .rev()
+            .find(|op| matches!(op, Op::ThreadSettings { .. }))
+        else {
+            panic!("expected a submitted Op::ThreadSettings, got: {ops:?}");
+        };
+        let permission_profile = thread_settings
+            .permission_profile
+            .as_ref()
+            .expect("set_mode must submit a permission_profile override");
+        assert_eq!(permission_profile, &PermissionProfile::read_only());
+
+        drop(thread);
+        Ok(())
+    }
+
+    fn test_extra_root() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(r"C:\external\project")
+        } else {
+            PathBuf::from("/external/project")
+        }
+    }
+
+    #[test]
+    fn build_profile_for_preset_merges_boot_extras_for_auto_and_workspace_full_auto() {
+        let extra_root = test_extra_root();
+        let boot_extras = BootWorkspaceWriteExtras {
+            extra_write_entries: vec![write_entry(extra_root.clone())],
+            network: NetworkSandboxPolicy::Enabled,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        for mode_id in ["auto", "workspace-full-auto"] {
+            let preset = APPROVAL_PRESETS
+                .iter()
+                .find(|preset| preset.id == mode_id)
+                .expect("preset should exist");
+            let applied = build_profile_for_preset(preset, &boot_extras);
+            assert_ne!(
+                applied, preset.permission_profile,
+                "{mode_id}: merged profile must differ from the pristine preset when boot extras are present"
+            );
+            assert_eq!(applied.network_sandbox_policy(), NetworkSandboxPolicy::Enabled);
+            assert!(
+                has_write_entry_for(&applied, &extra_root),
+                "{mode_id}: merged profile must include the boot extra root"
+            );
+        }
+    }
+
+    #[test]
+    fn build_profile_for_preset_applies_boot_tmp_excludes() {
+        let boot_extras = BootWorkspaceWriteExtras {
+            extra_write_entries: vec![],
+            network: NetworkSandboxPolicy::Restricted,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let preset = APPROVAL_PRESETS
+            .iter()
+            .find(|preset| preset.id == "auto")
+            .expect("preset should exist");
+        let applied = build_profile_for_preset(preset, &boot_extras);
+        assert_eq!(
+            applied,
+            PermissionProfile::workspace_write_with(
+                &[],
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            ),
+            "entry-level merge must reproduce workspace_write_with's exclude semantics"
+        );
+    }
+
+    #[test]
+    fn build_profile_for_preset_is_noop_when_boot_extras_are_default() {
+        let boot_extras = BootWorkspaceWriteExtras::default();
+        for mode_id in ["auto", "workspace-full-auto"] {
+            let preset = APPROVAL_PRESETS
+                .iter()
+                .find(|preset| preset.id == mode_id)
+                .expect("preset should exist");
+            let applied = build_profile_for_preset(preset, &boot_extras);
+            assert_eq!(
+                applied, preset.permission_profile,
+                "{mode_id}: default (empty) boot extras must reproduce the pristine preset byte-for-byte"
+            );
+        }
+    }
+
+    #[test]
+    fn build_profile_for_preset_leaves_read_only_and_full_access_pristine() {
+        let boot_extras = BootWorkspaceWriteExtras {
+            extra_write_entries: vec![write_entry(test_extra_root())],
+            network: NetworkSandboxPolicy::Enabled,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        for mode_id in ["read-only", "full-access"] {
+            let preset = APPROVAL_PRESETS
+                .iter()
+                .find(|preset| preset.id == mode_id)
+                .expect("preset should exist");
+            let applied = build_profile_for_preset(preset, &boot_extras);
+            assert_eq!(
+                applied, preset.permission_profile,
+                "{mode_id}: boot workspace-write extras must never leak into a preset outside the workspace-write family"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_boot_workspace_write_extras_extracts_roots_network_and_excludes()
+    -> anyhow::Result<()> {
+        let mut config = Config::load_with_cli_overrides_and_harness_overrides(
+            vec![],
+            ConfigOverrides::default(),
+        )
+        .await?;
+        let extra_entry = write_entry(config.codex_home.as_path().join("memories"));
+        let boot_profile = PermissionProfile::workspace_write_with(
+            &[config.codex_home.as_path().join("memories").try_into()?],
+            NetworkSandboxPolicy::Enabled,
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
+        config.permissions.set_permission_profile(boot_profile)?;
+
+        let extras = capture_boot_workspace_write_extras(&config);
+        assert_eq!(extras.extra_write_entries, vec![extra_entry]);
+        assert_eq!(extras.network, NetworkSandboxPolicy::Enabled);
+        assert!(extras.exclude_tmpdir_env_var);
+        assert!(extras.exclude_slash_tmp);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn capture_boot_workspace_write_extras_is_default_for_non_workspace_write_boot_profile()
+    -> anyhow::Result<()> {
+        let mut config = Config::load_with_cli_overrides_and_harness_overrides(
+            vec![],
+            ConfigOverrides::default(),
+        )
+        .await?;
+
+        // read-only boot profile: no workspace-write "extras" family to
+        // preserve, regardless of what network policy it carries.
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())?;
+        assert_eq!(
+            capture_boot_workspace_write_extras(&config),
+            BootWorkspaceWriteExtras::default()
+        );
+
+        // danger-full-access boot profile (`PermissionProfile::Disabled`):
+        // also not workspace-write shaped, even though its
+        // `network_sandbox_policy()` reports `Enabled`. That `Enabled` must
+        // NOT leak into a later `session/set_mode("auto")` merge.
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::Disabled)?;
+        assert_eq!(
+            capture_boot_workspace_write_extras(&config),
+            BootWorkspaceWriteExtras::default()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn current_session_mode_id_recognizes_merged_profile_with_network_enabled()
+    -> anyhow::Result<()> {
+        let mut config = Config::load_with_cli_overrides_and_harness_overrides(
+            vec![],
+            ConfigOverrides::default(),
+        )
+        .await?;
+        let boot_extras = BootWorkspaceWriteExtras {
+            extra_write_entries: vec![write_entry(config.codex_home.as_path().join("external"))],
+            network: NetworkSandboxPolicy::Enabled,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        // "auto" (OnRequest): merged profile with network Enabled must still
+        // resolve, even though the pristine "auto" preset's permission
+        // profile has network Restricted.
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        let auto_preset = APPROVAL_PRESETS
+            .iter()
+            .find(|preset| preset.id == "auto")
+            .expect("auto preset should exist");
+        let merged = build_profile_for_preset(auto_preset, &boot_extras);
+        config.permissions.set_permission_profile(merged)?;
+        let mode_id = current_session_mode_id(&config).expect("mode should be recognized");
+        assert_eq!(mode_id.0.as_ref(), "auto");
+
+        // "workspace-full-auto" (Never): same merged-profile shape, only the
+        // approval policy differs.
+        config.permissions.approval_policy.set(AskForApproval::Never)?;
+        let workspace_full_auto_preset = APPROVAL_PRESETS
+            .iter()
+            .find(|preset| preset.id == "workspace-full-auto")
+            .expect("workspace-full-auto preset should exist");
+        let merged = build_profile_for_preset(workspace_full_auto_preset, &boot_extras);
+        config.permissions.set_permission_profile(merged)?;
+        let mode_id = current_session_mode_id(&config).expect("mode should be recognized");
+        assert_eq!(mode_id.0.as_ref(), "workspace-full-auto");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn available_modes_include_all_four_ids() -> anyhow::Result<()> {
         let ids: Vec<&str> = APPROVAL_PRESETS.iter().map(|preset| preset.id).collect();
@@ -5234,6 +5918,7 @@ mod tests {
                     | Op::ResolveElicitation { .. }
                     | Op::RequestPermissionsResponse { .. }
                     | Op::PatchApproval { .. }
+                    | Op::ThreadSettings { .. }
                     | Op::Interrupt => {}
                     Op::Shutdown => {
                         if let Some(active_prompt_id) = self.active_prompt_id.lock().unwrap().take()
