@@ -21,24 +21,28 @@ path = "src/lib.rs"
 agent-client-protocol = { version = "=0.14.0", features = ["unstable"] }
 anyhow = "1"
 clap = "4"
-codex-apply-patch = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-arg0 = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-config = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-core = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-exec-server = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-extension-api = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-features = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-mcp-server = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-models-manager = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-protocol = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-login = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-shell-command = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-thread-store = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-utils-approval-presets = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-codex-utils-cli = { git = "https://github.com/openai/codex", tag = "rust-v0.137.0" }
-# Pin allocative to 0.3.4 because starlark_map 0.13.0 exposes hashbrown 0.14
-# internals that need allocative's matching hashbrown implementation.
-allocative = "=0.3.4"
+codex-apply-patch = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-arg0 = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-config = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-core = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-exec-server = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-extension-api = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-features = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-home = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-http-client = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-mcp-server = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-models-manager = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-protocol = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-login = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-shell-command = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-thread-store = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-utils-path-uri = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-utils-approval-presets = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-utils-cli = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+# Pin allocative to match starlark 0.14.2's `^0.3.6` requirement (bumped from
+# 0.3.4 during the rust-v0.144.3 dep bump; starlark_map's hashbrown internals
+# need allocative's matching hashbrown implementation).
+allocative = "=0.3.6"
 diffy = { version = "0.5.0", features = ["std"] }
 itertools = "0.14.0"
 serde = { version = "1", features = ["derive"] }
@@ -64,23 +68,26 @@ tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungsteni
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 
 [patch."https://github.com/openai/codex"]
-codex-utils-pty = { path = "vendor/codex-utils-pty" }
-# drama summary-titles: override every codex-* crate with our fork's branch
-# (drama-crew/codex @ drama/summary-titles) — adds exec_command `summary` →
-# ExecCommandBeginEvent so codex-acp can use it as the tool-call title.
+# drama: override every codex-* crate with our fork's 0.144 branch
+# (drama-crew/codex @ drama/summary-titles-codex-0.144) — upstream rust-v0.144.3
+# + exec_command `summary` → ExecCommandBeginEvent (tool-call titles), prompt
+# image recode knobs (DRAMA_PROMPT_IMAGE_*), and the Windows ConPTY handle fix.
 # Cargo.lock pins the exact commit for reproducible builds.
-codex-apply-patch = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-arg0 = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-config = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-core = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-exec-server = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-extension-api = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-features = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-mcp-server = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-models-manager = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-protocol = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-login = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-shell-command = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-thread-store = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-utils-approval-presets = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
-codex-utils-cli = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles" }
+codex-apply-patch = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-arg0 = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-config = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-core = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-exec-server = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-extension-api = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-features = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-home = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-http-client = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-mcp-server = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-models-manager = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-protocol = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-login = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-shell-command = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-thread-store = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-utils-path-uri = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-utils-approval-presets = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+codex-utils-cli = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
