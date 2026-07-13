@@ -4522,6 +4522,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn current_session_mode_id_disambiguates_workspace_full_auto_via_legacy_profile_setter()
+    -> anyhow::Result<()> {
+        // `current_session_mode_id_disambiguates_workspace_full_auto_from_auto`
+        // above seeds an *active* profile snapshot
+        // (`set_permission_profile_from_session_snapshot` /
+        // `PermissionProfileSnapshot::active`), which only exercises branch 1
+        // of `current_session_mode_id` (the `active_permission_profile()`
+        // path). But `handle_set_mode` (the real runtime path a client's
+        // `session/set_mode` actually takes) never calls the snapshot setter —
+        // it goes through `Config::set_permission_profile`, the *legacy*
+        // setter (see thread.rs's `handle_set_mode`), which leaves
+        // `active_permission_profile()` at `None`. That routes through branch
+        // 2 instead: the fallback scan by approval-discriminant +
+        // `permission_profile` equality. This test mirrors the legacy path so
+        // the "auto" vs "workspace-full-auto" disambiguation is proven for
+        // both branches, not just the snapshot one.
+        let mut config = Config::load_with_cli_overrides_and_harness_overrides(
+            vec![],
+            ConfigOverrides::default(),
+        )
+        .await?;
+
+        // :workspace + OnRequest (legacy setter) -> "auto" (regression: must
+        // not become ambiguous now that a second preset shares the same
+        // profile).
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::workspace_write())?;
+        assert!(config.permissions.active_permission_profile().is_none());
+        let mode_id = current_session_mode_id(&config).expect("mode should be recognized");
+        assert_eq!(mode_id.0.as_ref(), "auto");
+
+        // :workspace + Never (legacy setter, as `handle_set_mode` leaves it
+        // after resolving the "workspace-full-auto" preset) ->
+        // "workspace-full-auto".
+        config.permissions.approval_policy.set(AskForApproval::Never)?;
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::workspace_write())?;
+        assert!(config.permissions.active_permission_profile().is_none());
+        let mode_id = current_session_mode_id(&config).expect("mode should be recognized");
+        assert_eq!(mode_id.0.as_ref(), "workspace-full-auto");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn available_modes_include_all_four_ids() -> anyhow::Result<()> {
         let ids: Vec<&str> = APPROVAL_PRESETS.iter().map(|preset| preset.id).collect();
         assert_eq!(
