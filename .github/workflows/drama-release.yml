@@ -1,11 +1,15 @@
 name: drama-release
 
 # Builds the drama fork's codex-acp binary (with the exec_command `summary`
-# patch from drama-crew/codex) for linux amd64+arm64 AND macOS arm64+x86_64,
+# patch from drama-crew/codex) for linux amd64+arm64, macOS arm64 AND Windows x64,
 # and attaches them to a GitHub release. The drama sandbox image downloads the
 # linux prebuilt; the Electron desktop client (drama-platform) downloads the
-# macOS prebuilt (fetch-binaries.mjs 梯子① codex-acp-<arch>-apple-darwin) instead
+# macOS/Windows prebuilt (fetch-binaries.mjs 梯子① codex-acp-<triple>[.exe]) instead
 # of `npm i -g @zed-industries/codex-acp` (which lacks the summary field).
+#
+# Windows 必须用 x86_64-pc-windows-msvc（真 Windows runner）：rusty_v8 只发布
+# windows-msvc 的预编译 V8 静态库，没有 windows-gnu 版——故 macOS 上 gnu 交叉编译
+# 会在 v8 build.rs 下载处 404 失败，Windows 二进制只能在原生 Windows msvc 上产出。
 #
 # Tag convention: drama-vX.Y.Z (see DRAMA_FORK.md). Cargo.lock pins the exact
 # drama-crew/codex commit, so builds are reproducible.
@@ -34,6 +38,11 @@ jobs:
           # 再加回 `- runner: macos-13 / target: x86_64-apple-darwin`。
           - runner: macos-14
             target: aarch64-apple-darwin
+          # Windows x64：desktop 客户端经 fetch-binaries 梯子① 下载
+          # codex-acp-x86_64-pc-windows-msvc.exe（见文件头注释：必须 msvc + 原生 Windows）。
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: .exe
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -44,17 +53,25 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake perl
       # macOS runner 已内置 cmake / perl / cc / make（openssl-src vendored 构建所需），无需额外安装。
+      - name: Build deps (Windows — nasm for aws-lc-sys 汇编；cmake 已内置)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
       - name: Build codex-acp (release)
         run: cargo build --release --bin codex-acp --target ${{ matrix.target }}
-      - name: Stage binary
+      - name: Stage binary (Unix)
+        if: runner.os != 'Windows'
         run: |
           install -m755 "target/${{ matrix.target }}/release/codex-acp" "codex-acp-${{ matrix.target }}"
           ./codex-acp-${{ matrix.target }} --help >/dev/null 2>&1 || true
           grep -ac summary "codex-acp-${{ matrix.target }}" || true
+      - name: Stage binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item "target/${{ matrix.target }}/release/codex-acp.exe" "codex-acp-${{ matrix.target }}.exe"
       - uses: actions/upload-artifact@v4
         with:
-          name: codex-acp-${{ matrix.target }}
-          path: codex-acp-${{ matrix.target }}
+          name: codex-acp-${{ matrix.target }}${{ matrix.ext }}
+          path: codex-acp-${{ matrix.target }}${{ matrix.ext }}
 
   release:
     needs: build
