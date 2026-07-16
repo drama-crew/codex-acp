@@ -516,6 +516,7 @@ enum ThreadMessage {
         submission_id: String,
         interaction_id: u64,
         call_id: String,
+        turn_id: String,
         response: Result<serde_json::Value, Error>,
     },
 }
@@ -1038,12 +1039,13 @@ impl SubmissionState {
         &mut self,
         interaction_id: u64,
         call_id: String,
+        turn_id: String,
         response: Result<serde_json::Value, Error>,
     ) -> Result<(), Error> {
         match self {
             Self::Prompt(state) => {
                 state
-                    .handle_user_input_resolved(interaction_id, call_id, response)
+                    .handle_user_input_resolved(interaction_id, call_id, turn_id, response)
                     .await
             }
         }
@@ -1331,8 +1333,8 @@ impl PromptState {
         self.next_user_input_interaction_id = self.next_user_input_interaction_id.wrapping_add(1);
 
         let params = json!({
-            "call_id": call_id,
-            "turn_id": turn_id,
+            "call_id": &call_id,
+            "turn_id": &turn_id,
             "questions": questions,
         });
 
@@ -1340,12 +1342,14 @@ impl PromptState {
         let resolution_tx = self.resolution_tx.clone();
         let submission_id = self.submission_id.clone();
         let resolved_call_id = call_id.clone();
+        let resolved_turn_id = turn_id.clone();
         drop(tokio::spawn(async move {
             let response = client.ask_user(params).await;
             drop(resolution_tx.send(ThreadMessage::UserInputResolved {
                 submission_id,
                 interaction_id,
                 call_id: resolved_call_id,
+                turn_id: resolved_turn_id,
                 response,
             }));
         }));
@@ -1364,6 +1368,7 @@ impl PromptState {
         &mut self,
         interaction_id: u64,
         call_id: String,
+        turn_id: String,
         response: Result<serde_json::Value, Error>,
     ) -> Result<(), Error> {
         let Some(&pending_interaction_id) = self.pending_user_input_interactions.get(&call_id)
@@ -1385,9 +1390,12 @@ impl PromptState {
             .map(|resp| resp.answers)
             .unwrap_or_default();
 
+        // codex-core keys the pending `request_user_input` by the turn id
+        // (`Op::UserInputAnswer.id` is documented as "Turn id for the
+        // in-flight request"), NOT the tool call id.
         self.thread
             .submit(Op::UserInputAnswer {
-                id: call_id,
+                id: turn_id,
                 response: RequestUserInputResponse { answers },
             })
             .await
@@ -3247,6 +3255,7 @@ impl<A: Auth> ThreadActor<A> {
                 submission_id,
                 interaction_id,
                 call_id,
+                turn_id,
                 response,
             } => {
                 let Some(submission) = self.submissions.get_mut(&submission_id) else {
@@ -3257,7 +3266,7 @@ impl<A: Auth> ThreadActor<A> {
                 };
 
                 if let Err(err) = submission
-                    .handle_user_input_resolved(interaction_id, call_id, response)
+                    .handle_user_input_resolved(interaction_id, call_id, turn_id, response)
                     .await
                 {
                     submission.detach_pending_interactions();
@@ -6686,6 +6695,7 @@ mod tests {
         let ThreadMessage::UserInputResolved {
             interaction_id,
             call_id,
+            turn_id,
             response,
             ..
         } = tokio::time::timeout(Duration::from_millis(100), message_rx.recv())
@@ -6695,6 +6705,7 @@ mod tests {
             panic!("expected user input resolution message");
         };
         assert_eq!(call_id, event.call_id);
+        assert_eq!(turn_id, event.turn_id);
 
         // The client received exactly one `_drama/ask` request whose
         // `questions` payload is byte-for-byte identical to the event.
@@ -6716,14 +6727,16 @@ mod tests {
         drop(requests);
 
         prompt_state
-            .handle_user_input_resolved(interaction_id, call_id, response)
+            .handle_user_input_resolved(interaction_id, call_id, turn_id.clone(), response)
             .await?;
 
+        // `Op::UserInputAnswer.id` must be the turn id (codex-core keys the
+        // pending request by turn/sub id), never the tool call id.
         let ops = thread.ops.lock().unwrap();
         assert!(matches!(
             ops.last(),
             Some(Op::UserInputAnswer { id, response })
-                if id == "call-id" && response.answers.is_empty()
+                if *id == event.turn_id && *id == turn_id && response.answers.is_empty()
         ));
 
         Ok(())
@@ -6758,6 +6771,7 @@ mod tests {
         let ThreadMessage::UserInputResolved {
             interaction_id,
             call_id,
+            turn_id,
             response,
             ..
         } = tokio::time::timeout(Duration::from_millis(100), message_rx.recv())
@@ -6766,16 +6780,17 @@ mod tests {
         else {
             panic!("expected user input resolution message");
         };
+        assert_eq!(turn_id, sample_request_user_input_event().turn_id);
 
         prompt_state
-            .handle_user_input_resolved(interaction_id, call_id, response)
+            .handle_user_input_resolved(interaction_id, call_id, turn_id.clone(), response)
             .await?;
 
         let ops = thread.ops.lock().unwrap();
         assert!(matches!(
             ops.last(),
             Some(Op::UserInputAnswer { id, response })
-                if id == "call-id"
+                if *id == turn_id
                     && response.answers.get("q1").map(|a| a.answers.as_slice())
                         == Some(["42".to_string()].as_slice())
         ));
@@ -6819,6 +6834,7 @@ mod tests {
             let ThreadMessage::UserInputResolved {
                 interaction_id,
                 call_id,
+                turn_id,
                 response,
                 ..
             } = tokio::time::timeout(Duration::from_millis(100), message_rx.recv())
@@ -6827,16 +6843,17 @@ mod tests {
             else {
                 panic!("expected user input resolution message");
             };
+            assert_eq!(turn_id, sample_request_user_input_event().turn_id);
 
             prompt_state
-                .handle_user_input_resolved(interaction_id, call_id, response)
+                .handle_user_input_resolved(interaction_id, call_id, turn_id.clone(), response)
                 .await?;
 
             let ops = thread.ops.lock().unwrap();
             assert!(matches!(
                 ops.last(),
                 Some(Op::UserInputAnswer { id, response })
-                    if id == "call-id" && response.answers.is_empty()
+                    if *id == turn_id && response.answers.is_empty()
             ));
         }
 
