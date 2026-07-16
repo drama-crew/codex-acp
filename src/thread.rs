@@ -8,17 +8,17 @@ use std::{
 };
 
 use agent_client_protocol::{
-    Client, ConnectionTo, Error,
+    AgentRequest, Client, ConnectionTo, Error,
     schema::{
         AvailableCommand, AvailableCommandInput, AvailableCommandsUpdate, ClientCapabilities,
         ConfigOptionUpdate, Content, ContentBlock, ContentChunk, Diff, EmbeddedResource,
-        EmbeddedResourceResource, ImageContent, LoadSessionResponse, Meta, PermissionOption,
-        PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptRequest,
-        RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-        ResourceLink, SelectedPermissionOutcome, SessionConfigId, SessionConfigOption,
-        SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOption,
-        SessionConfigValueId, SessionId, SessionMode, SessionModeId, SessionModeState,
-        SessionNotification, SessionUpdate, StopReason, Terminal, TextContent,
+        EmbeddedResourceResource, ExtRequest, ImageContent, LoadSessionResponse, Meta,
+        PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority,
+        PlanEntryStatus, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+        RequestPermissionResponse, ResourceLink, SelectedPermissionOutcome, SessionConfigId,
+        SessionConfigOption, SessionConfigOptionCategory, SessionConfigOptionValue,
+        SessionConfigSelectOption, SessionConfigValueId, SessionId, SessionMode, SessionModeId,
+        SessionModeState, SessionNotification, SessionUpdate, StopReason, Terminal, TextContent,
         TextResourceContents, ToolCall, ToolCallContent, ToolCallId, ToolCallLocation,
         ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, UnstructuredCommandInput,
         UsageUpdate,
@@ -65,9 +65,9 @@ use codex_protocol::{
         McpStartupCompleteEvent, McpStartupUpdateEvent, McpToolCallBeginEvent, McpToolCallEndEvent,
         ModelRerouteEvent, NetworkApprovalContext, NetworkPolicyRuleAction, Op,
         PatchApplyBeginEvent, PatchApplyEndEvent, PatchApplyStatus, PatchApplyUpdatedEvent,
-        ReasoningContentDeltaEvent, ReasoningRawContentDeltaEvent, ReviewDecision,
-        ReviewOutputEvent, ReviewRequest, ReviewTarget, RolloutItem, StreamErrorEvent,
-        TerminalInteractionEvent, ThreadGoalStatus, ThreadGoalUpdatedEvent,
+        ReasoningContentDeltaEvent, ReasoningRawContentDeltaEvent, RequestUserInputEvent,
+        ReviewDecision, ReviewOutputEvent, ReviewRequest, ReviewTarget, RolloutItem,
+        StreamErrorEvent, TerminalInteractionEvent, ThreadGoalStatus, ThreadGoalUpdatedEvent,
         ThreadSettingsOverrides, TokenCountEvent, TurnAbortedEvent, TurnCompleteEvent,
         TurnStartedEvent, UserMessageEvent, ViewImageToolCallEvent, WarningEvent,
         WebSearchBeginEvent, WebSearchEndEvent,
@@ -76,25 +76,45 @@ use codex_protocol::{
         PermissionGrantScope, RequestPermissionProfile, RequestPermissionsEvent,
         RequestPermissionsResponse,
     },
+    request_user_input::RequestUserInputResponse,
     user_input::UserInput,
 };
 use codex_shell_command::parse_command::parse_command;
 use codex_utils_approval_presets::{ApprovalPreset, builtin_approval_presets};
 use heck::ToTitleCase;
 use itertools::Itertools;
-use serde_json::json;
+use serde_json::{json, value::RawValue};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 /// Abstraction over the ACP connection for sending notifications and requests
 /// back to the client. This replaces the old `Client` trait usage.
+/// ACP extension method used to bridge codex's native `request_user_input`
+/// tool to the client over the ACP wire protocol. Extension method names
+/// must be prefixed with `_` per the ACP spec.
+const ASK_USER_EXT_METHOD: &str = "_drama/ask";
+
+/// A request to the client over the ACP `_drama/ask` extension method. Kept
+/// as a small owned struct (rather than threading `ExtRequest`/`RawValue`
+/// through the trait) so the test double can inspect requests without
+/// depending on ACP's raw-JSON wire representation.
+#[derive(Debug, Clone, PartialEq)]
+struct AskUserRequest {
+    method: &'static str,
+    params: serde_json::Value,
+}
+
 trait ClientSender: Send + Sync + 'static {
     fn send_session_notification(&self, notif: SessionNotification) -> Result<(), Error>;
     fn request_permission(
         &self,
         req: RequestPermissionRequest,
     ) -> Pin<Box<dyn Future<Output = Result<RequestPermissionResponse, Error>> + Send + '_>>;
+    fn ask_user(
+        &self,
+        req: AskUserRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, Error>> + Send + '_>>;
 }
 
 /// Production implementation that wraps a `ConnectionTo<Client>`.
@@ -110,6 +130,21 @@ impl ClientSender for AcpConnection {
         req: RequestPermissionRequest,
     ) -> Pin<Box<dyn Future<Output = Result<RequestPermissionResponse, Error>> + Send + '_>> {
         Box::pin(async move { self.0.send_request(req).block_task().await })
+    }
+
+    fn ask_user(
+        &self,
+        req: AskUserRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, Error>> + Send + '_>> {
+        Box::pin(async move {
+            let params_str = serde_json::to_string(&req.params)
+                .map_err(|e| Error::internal_error().data(e.to_string()))?;
+            let raw = RawValue::from_string(params_str)
+                .map_err(|e| Error::internal_error().data(e.to_string()))?;
+            let ext_request =
+                AgentRequest::ExtMethodRequest(ExtRequest::new(req.method, Arc::from(raw)));
+            self.0.send_request(ext_request).block_task().await
+        })
     }
 }
 
@@ -476,6 +511,12 @@ enum ThreadMessage {
         interaction_id: u64,
         request_key: String,
         response: Result<RequestPermissionResponse, Error>,
+    },
+    UserInputResolved {
+        submission_id: String,
+        interaction_id: u64,
+        call_id: String,
+        response: Result<serde_json::Value, Error>,
     },
 }
 
@@ -993,6 +1034,21 @@ impl SubmissionState {
         }
     }
 
+    async fn handle_user_input_resolved(
+        &mut self,
+        interaction_id: u64,
+        call_id: String,
+        response: Result<serde_json::Value, Error>,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Prompt(state) => {
+                state
+                    .handle_user_input_resolved(interaction_id, call_id, response)
+                    .await
+            }
+        }
+    }
+
     fn detach_pending_interactions(&mut self) {
         match self {
             Self::Prompt(state) => {
@@ -1027,6 +1083,8 @@ struct PromptState {
     resolution_tx: mpsc::UnboundedSender<ThreadMessage>,
     pending_permission_interactions: HashMap<String, PendingPermissionInteraction>,
     next_permission_interaction_id: u64,
+    pending_user_input_interactions: HashMap<String, u64>,
+    next_user_input_interaction_id: u64,
     event_count: usize,
     response_tx: Option<oneshot::Sender<Result<StopReason, Error>>>,
     seen_message_deltas: bool,
@@ -1050,6 +1108,8 @@ impl PromptState {
             resolution_tx,
             pending_permission_interactions: HashMap::new(),
             next_permission_interaction_id: 0,
+            pending_user_input_interactions: HashMap::new(),
+            next_user_input_interaction_id: 0,
             event_count: 0,
             response_tx: Some(response_tx),
             seen_message_deltas: false,
@@ -1068,6 +1128,7 @@ impl PromptState {
         // Keep detached permission request tasks running so ACP can route the
         // client's required `Cancelled` response after session cancellation.
         self.pending_permission_interactions.clear();
+        self.pending_user_input_interactions.clear();
     }
 
     fn spawn_permission_request(
@@ -1250,6 +1311,87 @@ impl PromptState {
                     .map_err(|e| Error::from(anyhow::anyhow!(e)))?;
             }
         }
+
+        Ok(())
+    }
+
+    /// Bridge codex's native `request_user_input` tool call to the client
+    /// over the ACP `_drama/ask` extension method. Mirrors
+    /// `spawn_permission_request`: spawn a task that awaits the client's
+    /// response and routes it back to the actor via `ThreadMessage`, so the
+    /// event loop is never blocked waiting on the client.
+    fn spawn_user_input_request(&mut self, client: &SessionClient, event: RequestUserInputEvent) {
+        let RequestUserInputEvent {
+            call_id,
+            turn_id,
+            questions,
+        } = event;
+
+        let interaction_id = self.next_user_input_interaction_id;
+        self.next_user_input_interaction_id = self.next_user_input_interaction_id.wrapping_add(1);
+
+        let params = json!({
+            "call_id": call_id,
+            "turn_id": turn_id,
+            "questions": questions,
+        });
+
+        let client = client.clone();
+        let resolution_tx = self.resolution_tx.clone();
+        let submission_id = self.submission_id.clone();
+        let resolved_call_id = call_id.clone();
+        drop(tokio::spawn(async move {
+            let response = client.ask_user(params).await;
+            drop(resolution_tx.send(ThreadMessage::UserInputResolved {
+                submission_id,
+                interaction_id,
+                call_id: resolved_call_id,
+                response,
+            }));
+        }));
+
+        self.pending_user_input_interactions
+            .insert(call_id, interaction_id);
+    }
+
+    /// Resolve a previously-spawned `request_user_input` request. This is
+    /// deliberately tolerant of every failure mode (unreachable client,
+    /// malformed response, an empty `{}` acknowledgement): in all of those
+    /// cases we still submit `Op::UserInputAnswer` with empty answers so the
+    /// codex turn is never left hanging waiting on a response that will
+    /// never come.
+    async fn handle_user_input_resolved(
+        &mut self,
+        interaction_id: u64,
+        call_id: String,
+        response: Result<serde_json::Value, Error>,
+    ) -> Result<(), Error> {
+        let Some(&pending_interaction_id) = self.pending_user_input_interactions.get(&call_id)
+        else {
+            warn!("Ignoring user input response for unknown call id: {call_id}");
+            return Ok(());
+        };
+
+        if pending_interaction_id != interaction_id {
+            warn!("Ignoring stale user input response for call id: {call_id}");
+            return Ok(());
+        }
+
+        self.pending_user_input_interactions.remove(&call_id);
+
+        let answers = response
+            .ok()
+            .and_then(|value| serde_json::from_value::<RequestUserInputResponse>(value).ok())
+            .map(|resp| resp.answers)
+            .unwrap_or_default();
+
+        self.thread
+            .submit(Op::UserInputAnswer {
+                id: call_id,
+                response: RequestUserInputResponse { answers },
+            })
+            .await
+            .map_err(|e| Error::from(anyhow::anyhow!(e)))?;
 
         Ok(())
     }
@@ -1643,6 +1785,13 @@ impl PromptState {
                 );
                 self.guardian_assessment(client, event);
             }
+            EventMsg::RequestUserInput(event) => {
+                info!(
+                    "Request user input: call_id={} turn_id={}",
+                    event.call_id, event.turn_id
+                );
+                self.spawn_user_input_request(client, event);
+            }
 
             // Ignore these events
             EventMsg::AgentReasoningRawContent(..)
@@ -1672,8 +1821,7 @@ impl PromptState {
             | EventMsg::CollabCloseEnd(..)
             | EventMsg::PlanDelta(..)=> {}
             e @ (EventMsg::RealtimeConversationListVoicesResponse(..)
-            | EventMsg::DeprecationNotice(..)
-            | EventMsg::RequestUserInput(..)) => {
+            | EventMsg::DeprecationNotice(..)) => {
                 warn!("Unexpected event: {:?}", e);
             }
         }
@@ -2915,6 +3063,15 @@ impl SessionClient {
             ))
             .await
     }
+
+    async fn ask_user(&self, params: serde_json::Value) -> Result<serde_json::Value, Error> {
+        self.client
+            .ask_user(AskUserRequest {
+                method: ASK_USER_EXT_METHOD,
+                params,
+            })
+            .await
+    }
 }
 
 struct ThreadActor<A> {
@@ -3080,6 +3237,27 @@ impl<A: Auth> ThreadActor<A> {
                         request_key,
                         response,
                     )
+                    .await
+                {
+                    submission.detach_pending_interactions();
+                    submission.fail(err);
+                }
+            }
+            ThreadMessage::UserInputResolved {
+                submission_id,
+                interaction_id,
+                call_id,
+                response,
+            } => {
+                let Some(submission) = self.submissions.get_mut(&submission_id) else {
+                    warn!(
+                        "Ignoring user input response for unknown submission ID: {submission_id}"
+                    );
+                    return;
+                };
+
+                if let Err(err) = submission
+                    .handle_user_input_resolved(interaction_id, call_id, response)
                     .await
                 {
                     submission.detach_pending_interactions();
@@ -5837,6 +6015,7 @@ mod tests {
                     | Op::RequestPermissionsResponse { .. }
                     | Op::PatchApproval { .. }
                     | Op::ThreadSettings { .. }
+                    | Op::UserInputAnswer { .. }
                     | Op::Interrupt => {}
                     Op::Shutdown => {
                         if let Some(active_prompt_id) = self.active_prompt_id.lock().unwrap().take()
@@ -5878,6 +6057,8 @@ mod tests {
         permission_requests: std::sync::Mutex<Vec<RequestPermissionRequest>>,
         permission_responses: std::sync::Mutex<VecDeque<RequestPermissionResponse>>,
         block_permission_requests: Option<Arc<Notify>>,
+        ask_user_requests: std::sync::Mutex<Vec<AskUserRequest>>,
+        ask_user_responses: std::sync::Mutex<VecDeque<Result<serde_json::Value, Error>>>,
     }
 
     impl StubClient {
@@ -5887,6 +6068,8 @@ mod tests {
                 permission_requests: std::sync::Mutex::default(),
                 permission_responses: std::sync::Mutex::default(),
                 block_permission_requests: None,
+                ask_user_requests: std::sync::Mutex::default(),
+                ask_user_responses: std::sync::Mutex::default(),
             }
         }
 
@@ -5896,6 +6079,8 @@ mod tests {
                 permission_requests: std::sync::Mutex::default(),
                 permission_responses: std::sync::Mutex::new(responses.into()),
                 block_permission_requests: None,
+                ask_user_requests: std::sync::Mutex::default(),
+                ask_user_responses: std::sync::Mutex::default(),
             }
         }
 
@@ -5908,6 +6093,19 @@ mod tests {
                 permission_requests: std::sync::Mutex::default(),
                 permission_responses: std::sync::Mutex::new(responses.into()),
                 block_permission_requests: Some(notify),
+                ask_user_requests: std::sync::Mutex::default(),
+                ask_user_responses: std::sync::Mutex::default(),
+            }
+        }
+
+        fn with_ask_user_responses(responses: Vec<Result<serde_json::Value, Error>>) -> Self {
+            StubClient {
+                notifications: std::sync::Mutex::default(),
+                permission_requests: std::sync::Mutex::default(),
+                permission_responses: std::sync::Mutex::default(),
+                block_permission_requests: None,
+                ask_user_requests: std::sync::Mutex::default(),
+                ask_user_responses: std::sync::Mutex::new(responses.into()),
             }
         }
     }
@@ -5936,6 +6134,20 @@ mod tests {
                     .unwrap_or_else(|| {
                         RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
                     }))
+            })
+        }
+
+        fn ask_user(
+            &self,
+            args: AskUserRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, Error>> + Send + '_>> {
+            Box::pin(async move {
+                self.ask_user_requests.lock().unwrap().push(args);
+                self.ask_user_responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| Ok(json!({})))
             })
         }
     }
@@ -6428,6 +6640,205 @@ mod tests {
             ops.is_empty(),
             "late permission response should not submit an approval: {ops:?}"
         );
+
+        Ok(())
+    }
+
+    fn sample_request_user_input_event() -> RequestUserInputEvent {
+        use codex_protocol::request_user_input::RequestUserInputQuestion;
+        RequestUserInputEvent {
+            call_id: "call-id".to_string(),
+            turn_id: "turn-id".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "q1".to_string(),
+                header: "Header".to_string(),
+                question: "What next?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_request_user_input_bridges_to_drama_ask_ext_request() -> anyhow::Result<()> {
+        let session_id = SessionId::new("test");
+        let client = Arc::new(StubClient::with_ask_user_responses(vec![Ok(json!({
+            "answers": {}
+        }))]));
+        let session_client = SessionClient::with_client(session_id, client.clone(), Arc::default());
+        let thread = Arc::new(StubCodexThread::new());
+        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+        let (message_tx, mut message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut prompt_state = PromptState::new(
+            "submission-id".to_string(),
+            thread.clone(),
+            message_tx,
+            response_tx,
+        );
+
+        let event = sample_request_user_input_event();
+
+        prompt_state
+            .handle_event(&session_client, EventMsg::RequestUserInput(event.clone()))
+            .await;
+
+        let ThreadMessage::UserInputResolved {
+            interaction_id,
+            call_id,
+            response,
+            ..
+        } = tokio::time::timeout(Duration::from_millis(100), message_rx.recv())
+            .await?
+            .expect("expected a user input resolution message")
+        else {
+            panic!("expected user input resolution message");
+        };
+        assert_eq!(call_id, event.call_id);
+
+        // The client received exactly one `_drama/ask` request whose
+        // `questions` payload is byte-for-byte identical to the event.
+        let requests = client.ask_user_requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "_drama/ask");
+        assert_eq!(
+            requests[0].params.get("questions"),
+            Some(&serde_json::to_value(&event.questions)?)
+        );
+        assert_eq!(
+            requests[0].params.get("call_id").and_then(|v| v.as_str()),
+            Some(event.call_id.as_str())
+        );
+        assert_eq!(
+            requests[0].params.get("turn_id").and_then(|v| v.as_str()),
+            Some(event.turn_id.as_str())
+        );
+        drop(requests);
+
+        prompt_state
+            .handle_user_input_resolved(interaction_id, call_id, response)
+            .await?;
+
+        let ops = thread.ops.lock().unwrap();
+        assert!(matches!(
+            ops.last(),
+            Some(Op::UserInputAnswer { id, response })
+                if id == "call-id" && response.answers.is_empty()
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_request_user_input_answers_are_submitted_faithfully() -> anyhow::Result<()> {
+        let session_id = SessionId::new("test");
+        let client = Arc::new(StubClient::with_ask_user_responses(vec![Ok(json!({
+            "answers": {
+                "q1": {"answers": ["42"]},
+            }
+        }))]));
+        let session_client = SessionClient::with_client(session_id, client.clone(), Arc::default());
+        let thread = Arc::new(StubCodexThread::new());
+        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+        let (message_tx, mut message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut prompt_state = PromptState::new(
+            "submission-id".to_string(),
+            thread.clone(),
+            message_tx,
+            response_tx,
+        );
+
+        prompt_state
+            .handle_event(
+                &session_client,
+                EventMsg::RequestUserInput(sample_request_user_input_event()),
+            )
+            .await;
+
+        let ThreadMessage::UserInputResolved {
+            interaction_id,
+            call_id,
+            response,
+            ..
+        } = tokio::time::timeout(Duration::from_millis(100), message_rx.recv())
+            .await?
+            .expect("expected a user input resolution message")
+        else {
+            panic!("expected user input resolution message");
+        };
+
+        prompt_state
+            .handle_user_input_resolved(interaction_id, call_id, response)
+            .await?;
+
+        let ops = thread.ops.lock().unwrap();
+        assert!(matches!(
+            ops.last(),
+            Some(Op::UserInputAnswer { id, response })
+                if id == "call-id"
+                    && response.answers.get("q1").map(|a| a.answers.as_slice())
+                        == Some(["42".to_string()].as_slice())
+        ));
+
+        Ok(())
+    }
+
+    /// Fault tolerance: an empty `{}` acknowledgement, a response that fails
+    /// to parse as `RequestUserInputResponse`, and a hard request error must
+    /// all fall back to submitting empty answers rather than leaving the
+    /// codex turn hanging.
+    #[tokio::test]
+    async fn test_request_user_input_falls_back_to_empty_answers_on_any_failure() -> anyhow::Result<()>
+    {
+        for response in [
+            Ok(json!({})),
+            Ok(json!({"answers": "not-a-map"})),
+            Err(Error::internal_error().data("client unreachable")),
+        ] {
+            let session_id = SessionId::new("test");
+            let client = Arc::new(StubClient::with_ask_user_responses(vec![response]));
+            let session_client =
+                SessionClient::with_client(session_id, client.clone(), Arc::default());
+            let thread = Arc::new(StubCodexThread::new());
+            let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+            let (message_tx, mut message_rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut prompt_state = PromptState::new(
+                "submission-id".to_string(),
+                thread.clone(),
+                message_tx,
+                response_tx,
+            );
+
+            prompt_state
+                .handle_event(
+                    &session_client,
+                    EventMsg::RequestUserInput(sample_request_user_input_event()),
+                )
+                .await;
+
+            let ThreadMessage::UserInputResolved {
+                interaction_id,
+                call_id,
+                response,
+                ..
+            } = tokio::time::timeout(Duration::from_millis(100), message_rx.recv())
+                .await?
+                .expect("expected a user input resolution message")
+            else {
+                panic!("expected user input resolution message");
+            };
+
+            prompt_state
+                .handle_user_input_resolved(interaction_id, call_id, response)
+                .await?;
+
+            let ops = thread.ops.lock().unwrap();
+            assert!(matches!(
+                ops.last(),
+                Some(Op::UserInputAnswer { id, response })
+                    if id == "call-id" && response.answers.is_empty()
+            ));
+        }
 
         Ok(())
     }
