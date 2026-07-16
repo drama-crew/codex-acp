@@ -3072,7 +3072,17 @@ impl SessionClient {
             .await
     }
 
-    async fn ask_user(&self, params: serde_json::Value) -> Result<serde_json::Value, Error> {
+    async fn ask_user(&self, mut params: serde_json::Value) -> Result<serde_json::Value, Error> {
+        // ACP clients route session-scoped requests by the top-level
+        // `sessionId` (wire camelCase, same as `session/request_permission`);
+        // without it the client cannot resolve the target session.
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert(
+                "sessionId".to_string(),
+                serde_json::to_value(&self.session_id)
+                    .map_err(|e| Error::internal_error().data(e.to_string()))?,
+            );
+        }
         self.client
             .ask_user(AskUserRequest {
                 method: ASK_USER_EXT_METHOD,
@@ -6723,6 +6733,12 @@ mod tests {
         assert_eq!(
             requests[0].params.get("turn_id").and_then(|v| v.as_str()),
             Some(event.turn_id.as_str())
+        );
+        // Top-level `sessionId` (wire camelCase) is required for the client
+        // to route the ext request to the right session.
+        assert_eq!(
+            requests[0].params.get("sessionId"),
+            Some(&serde_json::to_value(SessionId::new("test"))?)
         );
         drop(requests);
 
