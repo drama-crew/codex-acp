@@ -41,6 +41,7 @@ use codex_protocol::{
     config_types::TrustLevel,
     dynamic_tools::{DynamicToolCallOutputContentItem, DynamicToolCallRequest},
     error::CodexErr,
+    items::TurnItem,
     mcp::CallToolResult,
     models::{
         ActivePermissionProfile, AdditionalPermissionProfile,
@@ -1485,6 +1486,9 @@ impl PromptState {
             }
             EventMsg::ItemStarted(ItemStartedEvent { thread_id, turn_id, item , started_at_ms: _}) => {
                 info!("Item started with thread_id: {thread_id}, turn_id: {turn_id}, item: {item:?}");
+                if let TurnItem::ContextCompaction(..) = &item {
+                    client.send_agent_text("Context compaction started\n".to_string());
+                }
             }
             EventMsg::UserMessage(UserMessageEvent {
                 message,
