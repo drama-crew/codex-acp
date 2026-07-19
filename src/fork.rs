@@ -306,24 +306,37 @@ pub fn find_fork_anchor(
         .ok_or(AnchorNotFound)
 }
 
+/// True when the caller's `nthHint` (1-based UI ordinal) disagrees with the
+/// text-matched 0-based index `k`. Pulled out of [`warn_on_nth_hint_mismatch`]
+/// as a pure, directly-testable predicate -- the `tracing::warn!` side effect
+/// itself isn't easily assertable from a unit test, but the semantics
+/// (`nth_hint` is 1-based, `k` is 0-based, `None` never mismatches) are the
+/// part worth pinning down.
+fn nth_hint_mismatches(nth_hint: Option<usize>, k: usize) -> bool {
+    match nth_hint {
+        None => false,
+        Some(hint) => hint.checked_sub(1) != Some(k),
+    }
+}
+
 /// Log a diagnostic warning (never an error) when the caller's `nthHint`
 /// (1-based UI ordinal) disagrees with the text-matched 0-based index `k`.
 /// The text match is always authoritative; this exists purely so drift
 /// between the UI's and rollout's user-message counts (silent monitor
 /// wake-ups, compaction, ...) is observable in logs.
 pub fn warn_on_nth_hint_mismatch(nth_hint: Option<usize>, source_session_id: &str, k: usize) {
-    let Some(hint) = nth_hint else {
+    if !nth_hint_mismatches(nth_hint, k) {
         return;
-    };
-    if hint.checked_sub(1) != Some(k) {
-        tracing::warn!(
-            source_session_id,
-            nth_hint = hint,
-            matched_k = k,
-            "_drama/session/fork: nthHint diagnostic mismatch against anchor-text match \
-             (using the text match as source of truth)"
-        );
     }
+    // `nth_hint_mismatches` only returns `true` when `nth_hint` is `Some`.
+    let hint = nth_hint.expect("nth_hint_mismatches returned true, so nth_hint must be Some");
+    tracing::warn!(
+        source_session_id,
+        nth_hint = hint,
+        matched_k = k,
+        "_drama/session/fork: nthHint diagnostic mismatch against anchor-text match \
+         (using the text match as source of truth)"
+    );
 }
 
 #[cfg(test)]
@@ -558,12 +571,40 @@ mod tests {
     }
 
     #[test]
-    fn nth_hint_mismatch_does_not_panic_and_matching_hint_is_silent() {
-        // These are smoke tests to confirm the diagnostic helper never
-        // affects control flow; behavior itself is only observable via
-        // `tracing` output.
+    fn nth_hint_mismatch_does_not_panic() {
+        // Smoke test to confirm the diagnostic helper never affects control
+        // flow regardless of match/mismatch; the `tracing::warn!` side
+        // effect itself is asserted separately via `nth_hint_mismatches`
+        // below.
         warn_on_nth_hint_mismatch(None, "session-a", 0);
         warn_on_nth_hint_mismatch(Some(1), "session-a", 0);
         warn_on_nth_hint_mismatch(Some(2), "session-a", 0);
+    }
+
+    #[test]
+    fn matching_hint_is_silent() {
+        // `nthHint` is 1-based (per the host's ordinal), `k` is 0-based --
+        // hint=1 matching k=0 is the *aligned* case and must not be flagged
+        // as a mismatch. This is the assertion the previous smoke test
+        // failed to make: it only checked "doesn't panic," which would stay
+        // green even if the host sent a double-decremented hint (0-based)
+        // and every real match silently miscompared against this 1-based
+        // check.
+        assert!(!nth_hint_mismatches(Some(1), 0));
+        assert!(!nth_hint_mismatches(Some(2), 1));
+        assert!(!nth_hint_mismatches(Some(5), 4));
+        // No hint at all is never a mismatch (diagnostic-only field).
+        assert!(!nth_hint_mismatches(None, 0));
+        assert!(!nth_hint_mismatches(None, 7));
+    }
+
+    #[test]
+    fn mismatching_hint_is_flagged() {
+        // Off-by-one in either direction, or an unrelated value, must be
+        // flagged as a mismatch.
+        assert!(nth_hint_mismatches(Some(1), 1)); // would only match if hint were 0-based
+        assert!(nth_hint_mismatches(Some(2), 0));
+        assert!(nth_hint_mismatches(Some(0), 0)); // hint=0 has no valid 0-based k (checked_sub underflows)
+        assert!(nth_hint_mismatches(Some(3), 9));
     }
 }
