@@ -1047,4 +1047,93 @@ mod tests {
             Some("preview".to_string())
         );
     }
+
+    // --- `_drama/steer` JSON-RPC wire surface -----------------------------
+    //
+    // These exercise `DramaSteerRequest` at the wire layer directly (method
+    // matching, camelCase params (de)serialization, response shape) without
+    // needing a live ACP connection.
+
+    #[test]
+    fn drama_steer_request_matches_method_matches_exact_ext_method_only() {
+        assert!(DramaSteerRequest::matches_method(STEER_EXT_METHOD));
+        assert!(DramaSteerRequest::matches_method("_drama/steer"));
+
+        // Must not match the un-prefixed name, other `_drama/*` ext
+        // methods, or unrelated core ACP methods.
+        assert!(!DramaSteerRequest::matches_method("drama/steer"));
+        assert!(!DramaSteerRequest::matches_method("_drama/ask"));
+        assert!(!DramaSteerRequest::matches_method("session/prompt"));
+        assert!(!DramaSteerRequest::matches_method(""));
+    }
+
+    #[test]
+    fn drama_steer_request_method_returns_ext_method_constant() {
+        let request = DramaSteerRequest {
+            session_id: SessionId::new("session-1"),
+            input: vec!["hi".into()],
+        };
+        assert_eq!(request.method(), STEER_EXT_METHOD);
+    }
+
+    #[test]
+    fn drama_steer_request_parse_message_accepts_camel_case_params() {
+        let params = serde_json::json!({
+            "sessionId": "session-123",
+            "input": [{ "type": "text", "text": "steer this in" }],
+        });
+
+        let request = DramaSteerRequest::parse_message(STEER_EXT_METHOD, &params)
+            .expect("camelCase params should parse into DramaSteerRequest");
+
+        assert_eq!(request.session_id, SessionId::new("session-123"));
+        assert!(matches!(
+            &request.input[..],
+            [ContentBlock::Text(text)] if text.text == "steer this in"
+        ));
+    }
+
+    #[test]
+    fn drama_steer_request_parse_message_round_trips_via_to_untyped_message() {
+        let original = DramaSteerRequest {
+            session_id: SessionId::new("session-456"),
+            input: vec!["round trip".into()],
+        };
+
+        let untyped = original
+            .to_untyped_message()
+            .expect("serializing to an untyped message should succeed");
+        assert_eq!(untyped.method, STEER_EXT_METHOD);
+
+        let reparsed = DramaSteerRequest::parse_message(STEER_EXT_METHOD, &untyped.params)
+            .expect("re-parsing the untyped params should succeed");
+
+        assert_eq!(reparsed.session_id, original.session_id);
+        assert!(matches!(
+            &reparsed.input[..],
+            [ContentBlock::Text(text)] if text.text == "round trip"
+        ));
+    }
+
+    #[test]
+    fn drama_steer_request_parse_message_rejects_mismatched_method() {
+        let params = serde_json::json!({
+            "sessionId": "session-1",
+            "input": [{ "type": "text", "text": "hi" }],
+        });
+
+        let err = DramaSteerRequest::parse_message("session/prompt", &params)
+            .expect_err("mismatched method should be rejected");
+        assert_eq!(i32::from(err.code), i32::from(Error::method_not_found().code));
+    }
+
+    #[test]
+    fn drama_steer_response_serializes_turn_id_as_camel_case() {
+        let response = serde_json::json!({ "turnId": "turn-789" });
+        assert_eq!(
+            response.get("turnId").and_then(|v| v.as_str()),
+            Some("turn-789")
+        );
+        assert_eq!(response.as_object().map(|o| o.len()), Some(1));
+    }
 }

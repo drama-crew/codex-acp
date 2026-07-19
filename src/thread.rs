@@ -6465,6 +6465,61 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_steer_input_error_no_active_turn_maps_to_dash_32002_with_stable_substring() {
+        let err = steer_input_error_to_acp_error(SteerInputError::NoActiveTurn(vec![]));
+        assert_eq!(i32::from(err.code), -32002);
+        assert!(
+            err.message.contains("no_active_turn"),
+            "message should contain the stable `no_active_turn` substring, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_steer_input_error_active_turn_not_steerable_maps_to_dash_32002_with_stable_substring()
+     {
+        for turn_kind in [NonSteerableTurnKind::Review, NonSteerableTurnKind::Compact] {
+            let err = steer_input_error_to_acp_error(SteerInputError::ActiveTurnNotSteerable {
+                turn_kind,
+            });
+            assert_eq!(i32::from(err.code), -32002);
+            assert!(
+                err.message.contains("not_steerable"),
+                "message should contain the stable `not_steerable` substring, got: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn test_steer_input_error_expected_turn_mismatch_maps_to_dash_32002_with_stable_substring() {
+        let err = steer_input_error_to_acp_error(SteerInputError::ExpectedTurnMismatch {
+            expected: "turn-1".to_string(),
+            actual: "turn-2".to_string(),
+        });
+        assert_eq!(i32::from(err.code), -32002);
+        assert!(
+            err.message.contains("no_active_turn"),
+            "message should contain the stable `no_active_turn` substring, got: {}",
+            err.message
+        );
+        assert!(err.message.contains("turn-1"));
+        assert!(err.message.contains("turn-2"));
+    }
+
+    #[test]
+    fn test_steer_input_error_empty_input_maps_to_invalid_params_not_dash_32002() {
+        let err = steer_input_error_to_acp_error(SteerInputError::EmptyInput);
+        assert_ne!(
+            i32::from(err.code),
+            -32002,
+            "EmptyInput is a client-side validation error, not the no_active_turn/not_steerable \
+             family, and must not share their -32002 code"
+        );
+        assert_eq!(i32::from(err.code), i32::from(Error::invalid_params().code));
+    }
+
     #[tokio::test]
     async fn test_exec_approval_uses_available_decisions() -> anyhow::Result<()> {
         let session_id = SessionId::new("test");
