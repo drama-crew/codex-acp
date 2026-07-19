@@ -1,7 +1,7 @@
 use acp::schema::{
     AgentAuthCapabilities, AgentCapabilities, AuthEnvVar, AuthMethod, AuthMethodAgent,
     AuthMethodEnvVar, AuthMethodId, AuthenticateRequest, AuthenticateResponse, CancelNotification,
-    ClientCapabilities, CloseSessionRequest, CloseSessionResponse, Implementation,
+    ClientCapabilities, CloseSessionRequest, CloseSessionResponse, ContentBlock, Implementation,
     InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse,
     LoadSessionRequest, LoadSessionResponse, LogoutCapabilities, LogoutRequest, LogoutResponse,
     McpCapabilities, McpServer, McpServerHttp, McpServerStdio, NewSessionRequest,
@@ -11,7 +11,7 @@ use acp::schema::{
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
     SetSessionModeResponse,
 };
-use acp::{Agent, Client, ConnectTo, ConnectionTo, Error};
+use acp::{Agent, Client, ConnectTo, ConnectionTo, Error, JsonRpcMessage, JsonRpcRequest};
 use agent_client_protocol as acp;
 use codex_config::{DEFAULT_MCP_SERVER_ENVIRONMENT_ID, McpServerConfig, McpServerTransportConfig};
 use codex_core::{
@@ -33,6 +33,7 @@ use codex_thread_store::{
     ListThreadsParams, SortDirection as StoreSortDirection, ThreadSortKey as StoreThreadSortKey,
     ThreadStore,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -41,7 +42,7 @@ use std::{
 use tracing::{debug, info};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::thread::Thread;
+use crate::thread::{STEER_EXT_METHOD, Thread};
 
 /// The Codex implementation of the ACP Agent.
 ///
@@ -68,6 +69,45 @@ pub struct CodexAgent {
 
 const SESSION_LIST_PAGE_SIZE: usize = 25;
 const SESSION_TITLE_MAX_GRAPHEMES: usize = 120;
+
+/// Agent-bound ACP extension request: `_drama/steer`. Lets a client inject
+/// additional user input into an in-flight turn without interrupting it
+/// (bridges to codex-core's `CodexThread::steer_input` via `Thread::steer`).
+/// Unlike the schema-generated request types above, this isn't part of the
+/// upstream ACP schema, so `JsonRpcMessage`/`JsonRpcRequest` are implemented
+/// by hand — mirroring the pattern the `agent-client-protocol` crate itself
+/// documents for custom extension methods.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DramaSteerRequest {
+    session_id: SessionId,
+    input: Vec<ContentBlock>,
+}
+
+impl JsonRpcMessage for DramaSteerRequest {
+    fn matches_method(method: &str) -> bool {
+        method == STEER_EXT_METHOD
+    }
+
+    fn method(&self) -> &'static str {
+        STEER_EXT_METHOD
+    }
+
+    fn to_untyped_message(&self) -> Result<acp::UntypedMessage, Error> {
+        acp::UntypedMessage::new(self.method(), self)
+    }
+
+    fn parse_message(method: &str, params: &impl serde::Serialize) -> Result<Self, Error> {
+        if !Self::matches_method(method) {
+            return Err(Error::method_not_found());
+        }
+        acp::util::json_cast(params)
+    }
+}
+
+impl JsonRpcRequest for DramaSteerRequest {
+    type Response = serde_json::Value;
+}
 
 impl CodexAgent {
     /// Create a new `CodexAgent` with the given configuration
@@ -249,6 +289,19 @@ impl CodexAgent {
                         let agent = agent.clone();
                         cx.spawn(async move {
                             responder.respond_with_result(agent.prompt(request).await)
+                        })?;
+                        Ok(())
+                    }
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let agent = agent.clone();
+                    async move |request: DramaSteerRequest, responder, cx: ConnectionTo<Client>| {
+                        let agent = agent.clone();
+                        cx.spawn(async move {
+                            responder.respond_with_result(agent.steer(request).await)
                         })?;
                         Ok(())
                     }
@@ -821,6 +874,20 @@ impl CodexAgent {
         Ok(PromptResponse::new(stop_reason))
     }
 
+    /// Handles `_drama/steer`: injects `request.input` into the session's
+    /// currently active turn without interrupting it. Does not echo the
+    /// input back to the client — hosts are responsible for rendering it,
+    /// same as the constraint on `_drama/ask`.
+    async fn steer(&self, request: DramaSteerRequest) -> Result<serde_json::Value, Error> {
+        info!("Processing steer for session: {}", request.session_id);
+        self.check_auth().await?;
+
+        let thread = self.get_thread(&request.session_id)?;
+        let turn_id = thread.steer(request.input).await?;
+
+        Ok(serde_json::json!({ "turnId": turn_id }))
+    }
+
     async fn cancel(&self, args: CancelNotification) -> Result<(), Error> {
         info!("Cancelling operations for session: {}", args.session_id);
         self.get_thread(&args.session_id)?.cancel().await?;
@@ -979,5 +1046,94 @@ mod tests {
             stored_session_title(Some("  "), "preview"),
             Some("preview".to_string())
         );
+    }
+
+    // --- `_drama/steer` JSON-RPC wire surface -----------------------------
+    //
+    // These exercise `DramaSteerRequest` at the wire layer directly (method
+    // matching, camelCase params (de)serialization, response shape) without
+    // needing a live ACP connection.
+
+    #[test]
+    fn drama_steer_request_matches_method_matches_exact_ext_method_only() {
+        assert!(DramaSteerRequest::matches_method(STEER_EXT_METHOD));
+        assert!(DramaSteerRequest::matches_method("_drama/steer"));
+
+        // Must not match the un-prefixed name, other `_drama/*` ext
+        // methods, or unrelated core ACP methods.
+        assert!(!DramaSteerRequest::matches_method("drama/steer"));
+        assert!(!DramaSteerRequest::matches_method("_drama/ask"));
+        assert!(!DramaSteerRequest::matches_method("session/prompt"));
+        assert!(!DramaSteerRequest::matches_method(""));
+    }
+
+    #[test]
+    fn drama_steer_request_method_returns_ext_method_constant() {
+        let request = DramaSteerRequest {
+            session_id: SessionId::new("session-1"),
+            input: vec!["hi".into()],
+        };
+        assert_eq!(request.method(), STEER_EXT_METHOD);
+    }
+
+    #[test]
+    fn drama_steer_request_parse_message_accepts_camel_case_params() {
+        let params = serde_json::json!({
+            "sessionId": "session-123",
+            "input": [{ "type": "text", "text": "steer this in" }],
+        });
+
+        let request = DramaSteerRequest::parse_message(STEER_EXT_METHOD, &params)
+            .expect("camelCase params should parse into DramaSteerRequest");
+
+        assert_eq!(request.session_id, SessionId::new("session-123"));
+        assert!(matches!(
+            &request.input[..],
+            [ContentBlock::Text(text)] if text.text == "steer this in"
+        ));
+    }
+
+    #[test]
+    fn drama_steer_request_parse_message_round_trips_via_to_untyped_message() {
+        let original = DramaSteerRequest {
+            session_id: SessionId::new("session-456"),
+            input: vec!["round trip".into()],
+        };
+
+        let untyped = original
+            .to_untyped_message()
+            .expect("serializing to an untyped message should succeed");
+        assert_eq!(untyped.method, STEER_EXT_METHOD);
+
+        let reparsed = DramaSteerRequest::parse_message(STEER_EXT_METHOD, &untyped.params)
+            .expect("re-parsing the untyped params should succeed");
+
+        assert_eq!(reparsed.session_id, original.session_id);
+        assert!(matches!(
+            &reparsed.input[..],
+            [ContentBlock::Text(text)] if text.text == "round trip"
+        ));
+    }
+
+    #[test]
+    fn drama_steer_request_parse_message_rejects_mismatched_method() {
+        let params = serde_json::json!({
+            "sessionId": "session-1",
+            "input": [{ "type": "text", "text": "hi" }],
+        });
+
+        let err = DramaSteerRequest::parse_message("session/prompt", &params)
+            .expect_err("mismatched method should be rejected");
+        assert_eq!(i32::from(err.code), i32::from(Error::method_not_found().code));
+    }
+
+    #[test]
+    fn drama_steer_response_serializes_turn_id_as_camel_case() {
+        let response = serde_json::json!({ "turnId": "turn-789" });
+        assert_eq!(
+            response.get("turnId").and_then(|v| v.as_str()),
+            Some("turn-789")
+        );
+        assert_eq!(response.as_object().map(|o| o.len()), Some(1));
     }
 }
