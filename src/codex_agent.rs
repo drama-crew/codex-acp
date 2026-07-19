@@ -863,16 +863,28 @@ impl CodexAgent {
 
         let config = self.build_session_config(&cwd, mcp_servers)?;
 
+        // Use `fork_thread_from_history` (not `fork_thread`) so the anchor
+        // index `k` -- computed above from `items`, the same
+        // `InitialHistory` this call receives -- and the truncation itself
+        // operate on the *same* item stream. `fork_thread` would instead
+        // re-read the rollout from the thread store into a second
+        // `InitialHistory` internally
+        // (`ThreadManager::initial_history_from_rollout_path`) and truncate
+        // that one, which is both a redundant read and a TOCTOU/equivalence
+        // risk if the two reads ever diverge (e.g. a concurrent append to
+        // the source rollout between the two reads). See `crate::fork`'s
+        // module doc for the anchor-matching semantics this depends on.
         let NewThread {
             thread_id,
             thread,
             session_configured: _,
-        } = Box::pin(self.thread_manager.fork_thread(
+        } = Box::pin(self.thread_manager.fork_thread_from_history(
             ForkSnapshot::TruncateBeforeNthUserMessage(k),
             config.clone(),
-            rollout_path,
+            history,
             /* thread_source */ None,
             /* parent_trace */ None,
+            /* supports_openai_form_elicitation */ false,
         ))
         .await
         .map_err(source_busy_error)?;
