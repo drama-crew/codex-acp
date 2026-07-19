@@ -25,3 +25,7 @@ codex-acp builds the ACP `toolCall.title` mechanically from codex's parsed comma
 
 ## Relationship to the shipped interim mechanism
 See `drama-crew/codex` DRAMA_FORK.md: the platform currently ships an interim `#__DRAMA_SUMMARY__` marker approach (merged on drama-platform main); this fork is the clean production mechanism that supersedes it once released.
+
+## Consumers
+- **Sandbox** installs this binary as the in-container ACP agent (see "Release" above); it does not call `_drama/session/fork` and is unaffected by that extension method.
+- **Desktop app** embeds this binary directly (resolved in `frontend/packages/agent-host/src/platform.ts`), so there is no separate host↔binary version skew to manage — the desktop release always ships the codex-acp build it was built against. The desktop's session-fork feature (clone a session's history/memory up to an earlier user message into a new session) depends on the inbound ACP ext-method `_drama/session/fork` (`src/fork.rs` + `CodexAgent::fork_session` in `src/codex_agent.rs`), which wraps codex-core's native `ThreadManager::fork_thread` / `ForkSnapshot::TruncateBeforeNthUserMessage`. Bumping this fork therefore also gates that desktop feature; see `docs/superpowers/specs/2026-07-20-desktop-session-fork-design.md` in the OpenHands repo for the full design.
