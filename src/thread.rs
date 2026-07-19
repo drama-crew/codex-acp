@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
@@ -26,7 +26,7 @@ use agent_client_protocol::{
 };
 use codex_apply_patch::parse_patch;
 use codex_core::{
-    CodexThread,
+    CodexThread, SteerInputError,
     config::{Config, set_project_trust_level},
     review_prompts::user_facing_hint,
 };
@@ -55,8 +55,8 @@ use codex_protocol::{
     },
     plan_tool::{PlanItemArg, StepStatus, UpdatePlanArgs},
     protocol::{
-        AgentMessageContentDeltaEvent, AgentMessageEvent, AgentReasoningEvent,
-        AgentReasoningRawContentEvent, AgentReasoningSectionBreakEvent,
+        AgentMessageContentDeltaEvent, AgentMessageEvent,
+        AgentReasoningEvent, AgentReasoningRawContentEvent, AgentReasoningSectionBreakEvent,
         ApplyPatchApprovalRequestEvent, AskForApproval, DynamicToolCallResponseEvent,
         ElicitationAction, EnteredReviewModeEvent,
         ErrorEvent, Event, EventMsg, ExecApprovalRequestEvent, ExecCommandBeginEvent,
@@ -64,7 +64,8 @@ use codex_protocol::{
         FileChange, GuardianAssessmentEvent, GuardianAssessmentStatus, ImageGenerationBeginEvent,
         ImageGenerationEndEvent, ItemCompletedEvent, ItemStartedEvent, McpInvocation,
         McpStartupCompleteEvent, McpStartupUpdateEvent, McpToolCallBeginEvent, McpToolCallEndEvent,
-        ModelRerouteEvent, NetworkApprovalContext, NetworkPolicyRuleAction, Op,
+        ModelRerouteEvent, NetworkApprovalContext, NetworkPolicyRuleAction,
+        NonSteerableTurnKind, Op,
         PatchApplyBeginEvent, PatchApplyEndEvent, PatchApplyStatus, PatchApplyUpdatedEvent,
         ReasoningContentDeltaEvent, ReasoningRawContentDeltaEvent, RequestUserInputEvent,
         ReviewDecision, ReviewOutputEvent, ReviewRequest, ReviewTarget, RolloutItem,
@@ -95,6 +96,12 @@ use uuid::Uuid;
 /// tool to the client over the ACP wire protocol. Extension method names
 /// must be prefixed with `_` per the ACP spec.
 const ASK_USER_EXT_METHOD: &str = "_drama/ask";
+
+/// ACP extension method used by clients to inject additional user input
+/// into an in-flight turn without interrupting it (bridges to codex-core's
+/// `CodexThread::steer_input`). Extension method names must be prefixed
+/// with `_` per the ACP spec.
+pub(crate) const STEER_EXT_METHOD: &str = "_drama/steer";
 
 /// A request to the client over the ACP `_drama/ask` extension method. Kept
 /// as a small owned struct (rather than threading `ExtRequest`/`RawValue`
@@ -422,6 +429,13 @@ pub trait CodexThreadImpl: Send + Sync {
     fn submit(&self, op: Op)
     -> Pin<Box<dyn Future<Output = Result<String, CodexErr>> + Send + '_>>;
     fn next_event(&self) -> Pin<Box<dyn Future<Output = Result<Event, CodexErr>> + Send + '_>>;
+    /// Injects additional user input into the currently active turn without
+    /// creating a new turn or interrupting the one in progress. Returns the
+    /// turn id the input was steered into.
+    fn steer_input(
+        &self,
+        input: Vec<UserInput>,
+    ) -> Pin<Box<dyn Future<Output = Result<String, SteerInputError>> + Send + '_>>;
 }
 
 impl CodexThreadImpl for CodexThread {
@@ -434,6 +448,13 @@ impl CodexThreadImpl for CodexThread {
 
     fn next_event(&self) -> Pin<Box<dyn Future<Output = Result<Event, CodexErr>> + Send + '_>> {
         Box::pin(self.next_event())
+    }
+
+    fn steer_input(
+        &self,
+        input: Vec<UserInput>,
+    ) -> Pin<Box<dyn Future<Output = Result<String, SteerInputError>> + Send + '_>> {
+        Box::pin(self.steer_input(input, BTreeMap::new(), None, None, None))
     }
 }
 
@@ -540,6 +561,14 @@ enum ThreadMessage {
         turn_id: String,
         response: Result<serde_json::Value, Error>,
     },
+    /// Injects `input` into the currently active turn via
+    /// `CodexThread::steer_input`, bypassing the prompt queue entirely.
+    /// Unlike `Prompt`, this never creates a `PromptState`/submission — it
+    /// resolves as soon as `steer_input` returns (or errors).
+    Steer {
+        input: Vec<ContentBlock>,
+        response_tx: oneshot::Sender<Result<String, SteerInputError>>,
+    },
 }
 
 pub struct Thread {
@@ -619,6 +648,23 @@ impl Thread {
             .map_err(|e| Error::internal_error().data(e.to_string()))??
             .await
             .map_err(|e| Error::internal_error().data(e.to_string()))?
+    }
+
+    /// Injects `input` into the currently active turn without going through
+    /// the prompt queue. Resolves as soon as `CodexThread::steer_input`
+    /// returns (no `PromptState` is created, and this layer never echoes
+    /// the input back to the client — hosts are responsible for that).
+    /// Returns the turn id the input was steered into.
+    pub async fn steer(&self, input: Vec<ContentBlock>) -> Result<String, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        let message = ThreadMessage::Steer { input, response_tx };
+        drop(self.message_tx.send(message));
+
+        response_rx
+            .await
+            .map_err(|e| Error::internal_error().data(e.to_string()))?
+            .map_err(steer_input_error_to_acp_error)
     }
 
     pub async fn set_mode(&self, mode: SessionModeId) -> Result<(), Error> {
@@ -3327,6 +3373,10 @@ impl<A: Auth> ThreadActor<A> {
                     submission.fail(err);
                 }
             }
+            ThreadMessage::Steer { input, response_tx } => {
+                let result = self.handle_steer(input).await;
+                drop(response_tx.send(result));
+            }
         }
     }
 
@@ -3707,6 +3757,16 @@ impl<A: Auth> ThreadActor<A> {
         self.submissions.insert(submission_id, state);
 
         Ok(response_rx)
+    }
+
+    /// Steers `input` into the currently active turn. Does not create a
+    /// `PromptState`/submission and does not consult `self.submissions` —
+    /// `steer_input` resolves synchronously (relative to the actor) with
+    /// either the steered-into turn id or an error describing why steering
+    /// wasn't possible (no active turn / turn not steerable).
+    async fn handle_steer(&mut self, input: Vec<ContentBlock>) -> Result<String, SteerInputError> {
+        let items = build_prompt_items(input);
+        self.thread.steer_input(items).await
     }
 
     async fn handle_set_mode(&mut self, mode: SessionModeId) -> Result<(), Error> {
@@ -4134,6 +4194,37 @@ impl<A: Auth> ThreadActor<A> {
             submission.handle_event(&self.client, msg).await;
         } else {
             warn!("Received event for unknown submission ID: {id} {msg:?}");
+        }
+    }
+}
+
+/// Maps codex-core's `SteerInputError` to the ACP error surfaced over
+/// `_drama/steer`. Per the wire contract, "no active turn to steer into"
+/// and "turn not steerable" (Review/Compact) are both reported as
+/// `code=-32002` with a `message` containing a stable, client-matchable
+/// substring (`no_active_turn` / `not_steerable`) so callers can downgrade
+/// gracefully instead of pattern-matching human-readable text.
+fn steer_input_error_to_acp_error(err: SteerInputError) -> Error {
+    match err {
+        SteerInputError::NoActiveTurn(_) => {
+            Error::new(-32002, "no_active_turn: no active turn to steer input into")
+        }
+        SteerInputError::ActiveTurnNotSteerable { turn_kind } => {
+            let turn_kind_label = match turn_kind {
+                NonSteerableTurnKind::Review => "review",
+                NonSteerableTurnKind::Compact => "compact",
+            };
+            Error::new(
+                -32002,
+                format!("not_steerable: cannot steer a {turn_kind_label} turn"),
+            )
+        }
+        SteerInputError::ExpectedTurnMismatch { expected, actual } => Error::new(
+            -32002,
+            format!("no_active_turn: expected active turn `{expected}` but found `{actual}`"),
+        ),
+        SteerInputError::EmptyInput => {
+            Error::invalid_params().data("steer input must not be empty")
         }
     }
 }
@@ -5761,6 +5852,8 @@ mod tests {
         ops: std::sync::Mutex<Vec<Op>>,
         op_tx: mpsc::UnboundedSender<Event>,
         op_rx: Mutex<mpsc::UnboundedReceiver<Event>>,
+        steer_calls: std::sync::Mutex<Vec<Vec<UserInput>>>,
+        steer_result: std::sync::Mutex<Option<Result<String, SteerInputError>>>,
     }
 
     impl StubCodexThread {
@@ -5772,7 +5865,17 @@ mod tests {
                 ops: std::sync::Mutex::default(),
                 op_tx,
                 op_rx: Mutex::new(op_rx),
+                steer_calls: std::sync::Mutex::default(),
+                steer_result: std::sync::Mutex::new(Some(Ok("turn-1".to_string()))),
             }
+        }
+
+        /// Configures the result the *next* `steer_input` call will resolve
+        /// with. `SteerInputError` isn't `Clone`, so this is single-shot
+        /// (consumed by the next call, matching the tests' one-call-per-test
+        /// shape).
+        fn set_steer_result(&self, result: Result<String, SteerInputError>) {
+            *self.steer_result.lock().unwrap() = Some(result);
         }
     }
 
@@ -6129,6 +6232,20 @@ mod tests {
                 Ok(event)
             })
         }
+
+        fn steer_input(
+            &self,
+            input: Vec<UserInput>,
+        ) -> Pin<Box<dyn Future<Output = Result<String, SteerInputError>> + Send + '_>> {
+            Box::pin(async move {
+                self.steer_calls.lock().unwrap().push(input);
+                self.steer_result
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap_or_else(|| Ok("turn-1".to_string()))
+            })
+        }
     }
 
     struct StubClient {
@@ -6298,6 +6415,52 @@ mod tests {
             begin_ids, end_ids,
             "completed update tool_call_ids should match begin tool_call_ids"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_steer_injects_into_active_turn() -> anyhow::Result<()> {
+        let (_session_id, _client, thread, message_tx, _handle) = setup().await?;
+        thread.set_steer_result(Ok("turn-42".to_string()));
+
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        message_tx.send(ThreadMessage::Steer {
+            input: vec!["steer this in".into()],
+            response_tx,
+        })?;
+
+        let turn_id = response_rx.await?.expect("steer should succeed");
+        assert_eq!(turn_id, "turn-42");
+
+        // Steering must not go through the prompt queue: it should never
+        // submit an `Op` to the underlying thread, only call `steer_input`
+        // directly.
+        assert!(thread.ops.lock().unwrap().is_empty());
+
+        let calls = thread.steer_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(matches!(
+            &calls[0][..],
+            [UserInput::Text { text, .. }] if text == "steer this in"
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_steer_no_active_turn_errors() -> anyhow::Result<()> {
+        let (_session_id, _client, thread, message_tx, _handle) = setup().await?;
+        thread.set_steer_result(Err(SteerInputError::NoActiveTurn(vec![])));
+
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        message_tx.send(ThreadMessage::Steer {
+            input: vec!["steer this in".into()],
+            response_tx,
+        })?;
+
+        let result = response_rx.await?;
+        assert!(matches!(result, Err(SteerInputError::NoActiveTurn(_))));
 
         Ok(())
     }
