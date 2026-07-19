@@ -11,6 +11,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing_subscriber::EnvFilter;
 
 mod codex_agent;
+mod fork;
 mod thread;
 
 /// Env var escape hatch: when set to a truthy value, the `request_user_input`
@@ -35,9 +36,7 @@ fn apply_default_mode_ask_feature(config: &mut Config) {
         .features
         .set_enabled(Feature::DefaultModeRequestUserInput, true)
     {
-        tracing::warn!(
-            "failed to enable request_user_input in default mode: {err}"
-        );
+        tracing::warn!("failed to enable request_user_input in default mode: {err}");
     }
 }
 
