@@ -42,7 +42,8 @@ use tracing::{debug, info};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::fork::{
-    ForkSessionRequest, ForkSessionResponse, anchor_not_found_error, source_busy_error,
+    ForkSessionRequest, ForkSessionResponse, anchor_not_found_error, fork_failed_error,
+    source_busy_error,
 };
 use crate::thread::Thread;
 
@@ -874,6 +875,14 @@ impl CodexAgent {
         // risk if the two reads ever diverge (e.g. a concurrent append to
         // the source rollout between the two reads). See `crate::fork`'s
         // module doc for the anchor-matching semantics this depends on.
+        //
+        // This failure is mapped to `fork_failed_error` (-32014), *not*
+        // `source_busy_error` (-32012): by this point the source rollout has
+        // already been read successfully and the anchor already resolved, so
+        // a failure here is a problem with the fork/spawn itself (bad
+        // config, thread-store write failure, ...) rather than "the source
+        // was momentarily busy." Folding it into `source_busy` would tell
+        // the caller this is retryable when it usually isn't.
         let NewThread {
             thread_id,
             thread,
@@ -887,7 +896,7 @@ impl CodexAgent {
             /* supports_openai_form_elicitation */ false,
         ))
         .await
-        .map_err(source_busy_error)?;
+        .map_err(fork_failed_error)?;
 
         let session_id = Self::session_id_from_thread_id(thread_id);
         // Record the session root for filesystem sandboxing.

@@ -61,6 +61,22 @@ pub const ANCHOR_NOT_FOUND_CODE: i32 = -32011;
 /// Retryable.
 pub const SOURCE_BUSY_CODE: i32 = -32012;
 
+/// JSON-RPC error code for a failure of the fork operation itself --
+/// `ThreadManager::fork_thread_from_history` (spawning the new thread from
+/// the already-read `InitialHistory`) failed. Unlike [`SOURCE_BUSY_CODE`],
+/// this is *not* a "the source rollout was momentarily unreadable, try
+/// again" condition: by the time this call runs, the source rollout has
+/// already been read successfully and the anchor has already been resolved.
+/// A failure here is something else going wrong in thread spawn/config
+/// (e.g. a bad MCP server config, thread-store write failure, disk full) --
+/// retrying the same fork request without the caller changing anything is
+/// unlikely to help, so this must not be folded into the retryable
+/// `source_busy` family the way it previously was (that let the UI offer an
+/// infinite "retry" affordance for a class of error retrying can't fix).
+/// Not retryable; the desktop host has no code-specific mapping for this
+/// and falls back to its generic "分叉失败" (fork failed) copy.
+pub const FORK_FAILED_CODE: i32 = -32014;
+
 /// Build the `-32011 anchor_not_found` error. `message` always contains the
 /// literal substring `anchor_not_found` so the desktop host's regex mapping
 /// (`friendlyCommandErrorDetail`) can key off it even if it only sees the
@@ -83,6 +99,17 @@ pub fn source_busy_error(detail: impl std::fmt::Display) -> agent_client_protoco
             "source_busy: the source session's rollout/state is temporarily unavailable, \
              retry shortly ({detail})"
         ),
+    )
+}
+
+/// Build the `-32014 fork_failed` error. `detail` is appended to the message
+/// for debugging; the literal substring `fork_failed` is always present for
+/// the same reason as [`anchor_not_found_error`]. See [`FORK_FAILED_CODE`]
+/// for why this is a distinct, non-retryable code from `source_busy`.
+pub fn fork_failed_error(detail: impl std::fmt::Display) -> agent_client_protocol::Error {
+    agent_client_protocol::Error::new(
+        FORK_FAILED_CODE,
+        format!("fork_failed: the fork operation itself failed ({detail})"),
     )
 }
 
@@ -559,6 +586,20 @@ mod tests {
         assert_eq!(request.anchor.text, "hello");
         assert_eq!(request.anchor.occurrence, 1);
         assert_eq!(request.nth_hint, Some(2));
+    }
+
+    #[test]
+    fn fork_failed_error_is_distinct_from_source_busy_and_not_retryable_coded() {
+        // `fork_failed` must be its own code, not folded into `source_busy`
+        // -- see `FORK_FAILED_CODE`'s doc comment for why conflating the two
+        // would mislead a caller into retrying a non-retryable failure.
+        let fork_failed = fork_failed_error("spawn_thread failed: disk full");
+        assert_eq!(fork_failed.code, FORK_FAILED_CODE.into());
+        assert!(fork_failed.message.contains("fork_failed"));
+
+        let busy = source_busy_error("rollout busy");
+        assert_eq!(busy.code, SOURCE_BUSY_CODE.into());
+        assert_ne!(fork_failed.code, busy.code);
     }
 
     #[test]
