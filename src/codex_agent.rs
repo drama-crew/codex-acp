@@ -977,7 +977,10 @@ impl CodexAgent {
             .unwrap()
             .insert(session_id.clone(), thread);
 
-        Ok(ForkSessionResponse { session_id })
+        Ok(ForkSessionResponse {
+            session_id,
+            matched_index: k,
+        })
     }
 
     async fn close_session(
@@ -1261,7 +1264,10 @@ mod tests {
 
         let err = DramaSteerRequest::parse_message("session/prompt", &params)
             .expect_err("mismatched method should be rejected");
-        assert_eq!(i32::from(err.code), i32::from(Error::method_not_found().code));
+        assert_eq!(
+            i32::from(err.code),
+            i32::from(Error::method_not_found().code)
+        );
     }
 
     #[test]
