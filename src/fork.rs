@@ -36,6 +36,52 @@
 //! It is a best-effort mirror, not shared code: if upstream adds a new
 //! contextual-fragment type with a novel marker, this scan will not
 //! automatically recognize it (residual risk accepted in the design doc).
+//!
+//! # Failure mode: silent mis-truncation, not a clean error
+//!
+//! Because `k` (the fork index we compute here, from our mirror) and the
+//! actual truncation (`ForkSnapshot::TruncateBeforeNthUserMessage(k)`,
+//! executed inside codex-core against *its own* private,
+//! `event_mapping`/`contextual_user_message`-based boundary scan) are two
+//! independently-written classifiers running over the same rollout, a drift
+//! between them -- e.g. codex-core adds a new contextual-fragment marker
+//! this mirror doesn't know about, or classifies an edge case (an empty
+//! text fragment, a mixed contextual+real-text message, ...) differently --
+//! does **not** surface as a request failure. Both classifiers always
+//! produce *some* integer index; if the two integers disagree, the fork
+//! silently succeeds against the *wrong* cut point: it may keep one turn
+//! too many/few, or in the injected-fragment case, treat an
+//! agent-visible-but-not-user-authored message as if the user said it (or
+//! vice versa). There is no exception to catch and no assertion to fail --
+//! this is a quiet correctness bug in the new session's seeded memory, not
+//! a crash.
+//!
+//! We evaluated adding a runtime cross-check (re-derive the cut point a
+//! second way after the real fork and compare) but found no way to do it
+//! without spawning the destination thread and reading its persisted
+//! rollout back (`CodexThread::rollout_path` +
+//! `RolloutRecorder::get_rollout_history`, both already used elsewhere in
+//! this crate) -- codex-core's own boundary computation
+//! (`fork_history_from_snapshot` and everything it calls) is
+//! `pub(crate)`/private with no public API that returns "here is the index
+//! I actually cut at." Reading the persisted rollout back would require the
+//! fork to have already fully completed and its rollout
+//! materialized/flushed to disk (`CodexThread::ensure_rollout_materialized`
+//! / `flush_rollout`, timing not guaranteed synchronous with
+//! `fork_thread_from_history` returning), and even then would only detect
+//! drift *after* an unrecoverable side effect (a new thread has already
+//! been spawned with the wrong history; there's no "undo" -- see the
+//! `source_busy` vs. `fork_failed` split in this module for the same
+//! "can't fully roll back a partially-completed fork" constraint). Building
+//! and testing that safely is a much larger change than this fix pass's
+//! scope, and it would still only be a runtime *detector*, not a
+//! *preventer* -- so we do not attempt it here. Instead, the enforcement is
+//! upstream, at diff-review time: see `DRAMA_FORK.md`'s "Tracking workflow"
+//! for the **mandatory** step added there requiring a manual diff between
+//! upstream's `CONTEXTUAL_USER_FRAGMENTS`/`is_contextual_user_message_content`
+//! and this module's `CONTEXTUAL_USER_TAG_PREFIXES`/`is_contextual_user_text`
+//! on every codex-core version bump, plus a real-binary fork e2e run before
+//! release.
 
 use agent_client_protocol::schema::{McpServer, SessionId};
 use agent_client_protocol::{JsonRpcRequest, JsonRpcResponse};
