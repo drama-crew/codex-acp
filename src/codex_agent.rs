@@ -15,7 +15,7 @@ use acp::{Agent, Client, ConnectTo, ConnectionTo, Error, JsonRpcMessage, JsonRpc
 use agent_client_protocol as acp;
 use codex_config::{DEFAULT_MCP_SERVER_ENVIRONMENT_ID, McpServerConfig, McpServerTransportConfig};
 use codex_core::{
-    NewThread, RolloutRecorder, StateDbHandle, ThreadManager, config::Config,
+    ForkSnapshot, NewThread, RolloutRecorder, StateDbHandle, ThreadManager, config::Config,
     find_thread_path_by_id_str, init_state_db, resolve_installation_id, thread_store_from_config,
 };
 use codex_exec_server::{EnvironmentManager, ExecServerRuntimePaths};
@@ -27,7 +27,7 @@ use codex_login::{
 };
 use codex_protocol::{
     ThreadId,
-    protocol::{InitialHistory, SessionSource},
+    protocol::{InitialHistory, RolloutItem, SessionSource},
 };
 use codex_thread_store::{
     ListThreadsParams, SortDirection as StoreSortDirection, ThreadSortKey as StoreThreadSortKey,
@@ -42,6 +42,10 @@ use std::{
 use tracing::{debug, info};
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::fork::{
+    ForkSessionRequest, ForkSessionResponse, anchor_not_found_error, fork_failed_error,
+    source_busy_error,
+};
 use crate::thread::{STEER_EXT_METHOD, Thread};
 
 /// The Codex implementation of the ACP Agent.
@@ -270,6 +274,21 @@ impl CodexAgent {
             .on_receive_request(
                 {
                     let agent = agent.clone();
+                    async move |request: ForkSessionRequest, responder, cx: ConnectionTo<Client>| {
+                        let agent = agent.clone();
+                        let session_cx = cx.clone();
+                        cx.spawn(async move {
+                            responder
+                                .respond_with_result(agent.fork_session(request, session_cx).await)
+                        })?;
+                        Ok(())
+                    }
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let agent = agent.clone();
                     async move |request: CloseSessionRequest,
                                 responder,
                                 cx: ConnectionTo<Client>| {
@@ -458,9 +477,9 @@ impl CodexAgent {
                                     Some(env.into_iter().map(|env| (env.name, env.value)).collect())
                                 },
                                 env_vars: vec![],
-                                cwd: Some(codex_utils_path_uri::LegacyAppPathString::from_abs_path(
-                                    &cwd,
-                                )),
+                                cwd: Some(
+                                    codex_utils_path_uri::LegacyAppPathString::from_abs_path(&cwd),
+                                ),
                             },
                             required: false,
                             enabled: true,
@@ -841,6 +860,124 @@ impl CodexAgent {
             .collect::<Vec<_>>();
 
         Ok(ListSessionsResponse::new(sessions).next_cursor(page.next_cursor))
+    }
+
+    /// `_drama/session/fork` inbound ext-method handler: clone a source
+    /// session's agent memory up to (not including) an anchor-matched user
+    /// message into a brand-new session, without replaying history to the
+    /// client (the host's own EventLog copy is the UI history source of
+    /// truth for the new session -- replaying here would double it).
+    ///
+    /// See `crate::fork` for the anchor-matching semantics and
+    /// `docs/superpowers/specs/2026-07-20-desktop-session-fork-design.md`
+    /// (OpenHands repo) for the full cross-repo design.
+    async fn fork_session(
+        &self,
+        request: ForkSessionRequest,
+        cx: ConnectionTo<Client>,
+    ) -> Result<ForkSessionResponse, Error> {
+        // Check before sending if authentication was successful or not
+        self.check_auth().await?;
+
+        let ForkSessionRequest {
+            cwd,
+            source_session_id,
+            anchor,
+            nth_hint,
+            mcp_servers,
+        } = request;
+
+        info!(
+            "Forking session: source={} anchor_occurrence={}",
+            source_session_id.0, anchor.occurrence
+        );
+
+        let rollout_path = find_thread_path_by_id_str(
+            &self.config.codex_home,
+            source_session_id.0.as_ref(),
+            self.state_db.as_deref(),
+        )
+        .await
+        .map_err(source_busy_error)?
+        .ok_or_else(|| Error::resource_not_found(None))?;
+
+        let history = RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .map_err(source_busy_error)?;
+
+        let items: Vec<RolloutItem> = match &history {
+            InitialHistory::Resumed(resumed) => resumed.history.as_ref().clone(),
+            InitialHistory::Forked(items) => items.clone(),
+            InitialHistory::Cleared | InitialHistory::New => Vec::new(),
+        };
+
+        let k = crate::fork::find_fork_anchor(&items, &anchor.text, anchor.occurrence)
+            .map_err(|_| anchor_not_found_error())?;
+        crate::fork::warn_on_nth_hint_mismatch(nth_hint, source_session_id.0.as_ref(), k);
+
+        let config = self.build_session_config(&cwd, mcp_servers)?;
+
+        // Use `fork_thread_from_history` (not `fork_thread`) so the anchor
+        // index `k` -- computed above from `items`, the same
+        // `InitialHistory` this call receives -- and the truncation itself
+        // operate on the *same* item stream. `fork_thread` would instead
+        // re-read the rollout from the thread store into a second
+        // `InitialHistory` internally
+        // (`ThreadManager::initial_history_from_rollout_path`) and truncate
+        // that one, which is both a redundant read and a TOCTOU/equivalence
+        // risk if the two reads ever diverge (e.g. a concurrent append to
+        // the source rollout between the two reads). See `crate::fork`'s
+        // module doc for the anchor-matching semantics this depends on.
+        //
+        // This failure is mapped to `fork_failed_error` (-32014), *not*
+        // `source_busy_error` (-32012): by this point the source rollout has
+        // already been read successfully and the anchor already resolved, so
+        // a failure here is a problem with the fork/spawn itself (bad
+        // config, thread-store write failure, ...) rather than "the source
+        // was momentarily busy." Folding it into `source_busy` would tell
+        // the caller this is retryable when it usually isn't.
+        let NewThread {
+            thread_id,
+            thread,
+            session_configured: _,
+        } = Box::pin(self.thread_manager.fork_thread_from_history(
+            ForkSnapshot::TruncateBeforeNthUserMessage(k),
+            config.clone(),
+            history,
+            /* thread_source */ None,
+            /* parent_trace */ None,
+            /* supports_openai_form_elicitation */ false,
+        ))
+        .await
+        .map_err(fork_failed_error)?;
+
+        let session_id = Self::session_id_from_thread_id(thread_id);
+        // Record the session root for filesystem sandboxing.
+        self.session_roots
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), config.cwd.to_path_buf());
+        let thread = Arc::new(Thread::new(
+            session_id.clone(),
+            thread,
+            self.auth_manager.clone(),
+            Arc::new(self.thread_manager.get_models_manager()),
+            self.client_capabilities.clone(),
+            config.clone(),
+            cx,
+        ));
+        //照 new_session: `load()` registers session-mode/config-option state
+        // and kicks off the available-commands notification, but we deliberately
+        // do NOT `replay_history()` -- the host copies UI history into the new
+        // session's own EventLog, and replaying here would double it.
+        let _load = thread.load().await?;
+
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), thread);
+
+        Ok(ForkSessionResponse { session_id })
     }
 
     async fn close_session(
