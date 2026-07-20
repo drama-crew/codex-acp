@@ -197,6 +197,14 @@ pub struct ForkSessionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ForkSessionResponse {
     pub session_id: SessionId,
+    /// The 0-based index `k` of the user message the anchor text-matched
+    /// against -- the same value passed to
+    /// `ForkSnapshot::TruncateBeforeNthUserMessage`. Lets the host compare
+    /// it against its own `ordinal - 1` to diagnose `nth_hint` drift
+    /// without depending on the subprocess's `RUST_LOG` level (the
+    /// `tracing::warn!` in `warn_on_nth_hint_mismatch` is invisible in
+    /// production where `RUST_LOG=error`).
+    pub matched_index: usize,
 }
 
 /// Contextual open-tag markers for `role: "user"` rollout messages that are
@@ -652,9 +660,24 @@ mod tests {
     fn wire_response_serializes_session_id_camel_case() {
         let response = ForkSessionResponse {
             session_id: SessionId::new("new-session-id"),
+            matched_index: 3,
         };
         let value = serde_json::to_value(&response).expect("should serialize");
         assert_eq!(value["sessionId"], "new-session-id");
+        assert_eq!(value["matchedIndex"], 3);
+    }
+
+    #[test]
+    fn wire_response_matched_index_is_zero_based_truncation_index() {
+        // `matched_index` is the 0-based `k` handed to
+        // `ForkSnapshot::TruncateBeforeNthUserMessage`, not a 1-based
+        // ordinal -- the host diffs it against its own `ordinal - 1`.
+        let response = ForkSessionResponse {
+            session_id: SessionId::new("s2"),
+            matched_index: 0,
+        };
+        let value = serde_json::to_value(&response).expect("should serialize");
+        assert_eq!(value["matchedIndex"], 0);
     }
 
     #[test]
