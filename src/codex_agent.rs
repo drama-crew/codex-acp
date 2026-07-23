@@ -19,7 +19,7 @@ use codex_core::{
     find_thread_path_by_id_str, init_state_db, resolve_installation_id, thread_store_from_config,
 };
 use codex_exec_server::{EnvironmentManager, ExecServerRuntimePaths};
-use codex_extension_api::empty_extension_registry;
+use codex_extension_api::{ExtensionRegistryBuilder, NoopExtensionEventSink};
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::{
     CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR,
@@ -113,43 +113,92 @@ impl JsonRpcRequest for DramaSteerRequest {
     type Response = serde_json::Value;
 }
 
+/// Shared infra built once per process and reused by every codex-acp entry point: the live ACP
+/// server (`CodexAgent::new`, below) as well as the standalone `memory-run`/`memory-clear` CLI
+/// subcommands (`crate::memory_worker`). Extracted from `CodexAgent::new` so the memory-worker
+/// entry points reuse the exact same auth/state-db/thread-manager/extension-registry wiring the
+/// live ACP server uses instead of duplicating (and risking drifting from) it.
+pub(crate) struct ThreadManagerBundle {
+    pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) thread_manager: ThreadManager,
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) state_db: Option<StateDbHandle>,
+}
+
+/// Builds the `AuthManager`, state DB handle, thread store and `ThreadManager` shared by every
+/// codex-acp entry point.
+///
+/// Installs the memories read-path extension (`codex_memories_extension::install`) into the
+/// thread manager's extension registry -- gated internally by that extension on
+/// `Feature::MemoryTool` + `config.memories.use_memories`, so it stays harmless (a no-op) for any
+/// caller/config where memories aren't enabled, notably the sandbox agent-server config, which
+/// must not enable `Feature::MemoryTool`. Every thread this `ThreadManager` creates is tagged
+/// `SessionSource::Cli`: codex-acp is always invoked as a CLI-launched subprocess, whether it's
+/// serving ACP over stdio or running a one-shot memory-worker pass.
+pub(crate) async fn build_thread_manager_bundle(
+    config: &Config,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+) -> std::io::Result<ThreadManagerBundle> {
+    let auth_manager = AuthManager::shared_from_config(config, false).await;
+
+    let state_db = init_state_db(config).await;
+    let local_runtime_paths =
+        ExecServerRuntimePaths::new(std::env::current_exe()?, codex_linux_sandbox_exe)?;
+    let environment_manager = Arc::new(
+        EnvironmentManager::from_codex_home(&config.codex_home, Some(local_runtime_paths))
+            .await
+            .map_err(std::io::Error::other)?,
+    );
+    let thread_store = thread_store_from_config(config, state_db.clone());
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
+        config.codex_home.clone(),
+    ));
+
+    let mut extensions_registry_builder =
+        ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::new(NoopExtensionEventSink));
+    codex_memories_extension::install(&mut extensions_registry_builder, None);
+    let extensions = Arc::new(extensions_registry_builder.build());
+
+    let thread_manager = ThreadManager::new(
+        config,
+        auth_manager.clone(),
+        SessionSource::Cli,
+        environment_manager,
+        extensions,
+        user_instructions_provider,
+        /* analytics_events_client */ None,
+        thread_store.clone(),
+        codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
+        installation_id,
+        /* attestation_provider */ None,
+        /* external_time_provider */ None,
+    );
+
+    Ok(ThreadManagerBundle {
+        auth_manager,
+        thread_manager,
+        thread_store,
+        state_db,
+    })
+}
+
 impl CodexAgent {
     /// Create a new `CodexAgent` with the given configuration
     pub async fn new(
         config: Config,
         codex_linux_sandbox_exe: Option<PathBuf>,
     ) -> std::io::Result<Self> {
-        let auth_manager = AuthManager::shared_from_config(&config, false).await;
-
         let client_capabilities: Arc<Mutex<ClientCapabilities>> = Arc::default();
         let session_roots: Arc<Mutex<HashMap<SessionId, PathBuf>>> = Arc::default();
-        let state_db = init_state_db(&config).await;
-        let local_runtime_paths =
-            ExecServerRuntimePaths::new(std::env::current_exe()?, codex_linux_sandbox_exe)?;
-        let environment_manager = Arc::new(
-            EnvironmentManager::from_codex_home(&config.codex_home, Some(local_runtime_paths))
-                .await
-                .map_err(std::io::Error::other)?,
-        );
-        let thread_store = thread_store_from_config(&config, state_db.clone());
-        let installation_id = resolve_installation_id(&config.codex_home).await?;
-        let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
-            config.codex_home.clone(),
-        ));
-        let thread_manager = ThreadManager::new(
-            &config,
-            auth_manager.clone(),
-            SessionSource::Unknown,
-            environment_manager,
-            empty_extension_registry(),
-            user_instructions_provider,
-            /* analytics_events_client */ None,
-            thread_store.clone(),
-            codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
-            installation_id,
-            /* attestation_provider */ None,
-            /* external_time_provider */ None,
-        );
+
+        let ThreadManagerBundle {
+            auth_manager,
+            thread_manager,
+            thread_store,
+            state_db,
+        } = build_thread_manager_bundle(&config, codex_linux_sandbox_exe).await?;
+
         Ok(Self {
             auth_manager,
             client_capabilities,

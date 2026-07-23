@@ -31,10 +31,13 @@ codex-features = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3
 codex-home = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-http-client = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-mcp-server = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-memories-extension = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-memories-write = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-models-manager = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-protocol = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-login = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-shell-command = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
+codex-state = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-thread-store = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-utils-path-uri = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
 codex-utils-approval-presets = { git = "https://github.com/openai/codex", tag = "rust-v0.144.3" }
@@ -58,6 +61,9 @@ heck = "0.5.0"
 unicode-segmentation = "1.11.0"
 uuid = { version = "1", features = ["v4"] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints.rust]
 let-underscore = "warn"
 rust-2018-idioms = "warn"
@@ -68,26 +74,45 @@ tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungsteni
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 
 [patch."https://github.com/openai/codex"]
-# drama: override every codex-* crate with our fork's 0.144 branch
-# (drama-crew/codex @ drama/summary-titles-codex-0.144) — upstream rust-v0.144.3
-# + exec_command `summary` → ExecCommandBeginEvent (tool-call titles), prompt
-# image recode knobs (DRAMA_PROMPT_IMAGE_*), and the Windows ConPTY handle fix.
-# Cargo.lock pins the exact commit for reproducible builds.
-codex-apply-patch = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-arg0 = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-config = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-core = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-exec-server = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-extension-api = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-features = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-home = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-http-client = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-mcp-server = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-models-manager = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-protocol = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-login = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-shell-command = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-thread-store = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-utils-path-uri = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-utils-approval-presets = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
-codex-utils-cli = { git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }
+# drama: TEMPORARY local-worktree override (Task B5, 2026-07-24) — every codex-* crate below
+# points at the local `codex` worktree (`./.worktrees/agent-memory/codex/codex-rs`, branch
+# `drama/agent-memory-0.144`) instead of our usual pinned fork branch
+# (drama-crew/codex @ drama/summary-titles-codex-0.144), so codex-acp can pick up the
+# not-yet-pushed B1-B4 memories deliverables (codex-memories-extension, codex-memories-write,
+# codex-state's clear_memory_data_in_sqlite_home, SessionSource::Cli wiring, etc.) that only
+# exist on that local worktree so far.
+#
+# Cargo `[patch]` overrides are all-or-nothing *per source URL*: codex-core is a transitive
+# dependency of nearly every other codex-* crate here, so if even one entry were left pointing at
+# the old git branch while codex-memories-extension/codex-memories-write pull in codex-core from
+# the local path, Cargo resolves two different sources for codex-core and fails with a "two
+# sources" conflict. Hence every single codex-* entry — not just the two new memories crates —
+# has to be switched to the same local path override together.
+#
+# TODO(agent-memory): once `drama/agent-memory-0.144` is pushed to
+# https://github.com/drama-crew/codex and merged into (or replaces)
+# `drama/summary-titles-codex-0.144`, revert every entry below back to
+# `{ git = "https://github.com/drama-crew/codex", branch = "drama/summary-titles-codex-0.144" }`
+# (or whatever the merged branch/tag ends up being) — do not leave this pointing at a local path
+# in a long-lived branch.
+codex-apply-patch = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/apply-patch" }
+codex-arg0 = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/arg0" }
+codex-config = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/config" }
+codex-core = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/core" }
+codex-exec-server = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/exec-server" }
+codex-extension-api = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/ext/extension-api" }
+codex-features = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/features" }
+codex-home = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/codex-home" }
+codex-http-client = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/http-client" }
+codex-mcp-server = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/mcp-server" }
+codex-memories-extension = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/ext/memories" }
+codex-memories-write = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/memories/write" }
+codex-models-manager = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/models-manager" }
+codex-protocol = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/protocol" }
+codex-login = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/login" }
+codex-shell-command = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/shell-command" }
+codex-state = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/state" }
+codex-thread-store = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/thread-store" }
+codex-utils-path-uri = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/utils/path-uri" }
+codex-utils-approval-presets = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/utils/approval-presets" }
+codex-utils-cli = { path = "/Users/feng/codes/s_codes/.worktrees/agent-memory/codex/codex-rs/utils/cli" }

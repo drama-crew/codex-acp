@@ -12,6 +12,7 @@ use tracing_subscriber::EnvFilter;
 
 mod codex_agent;
 mod fork;
+pub mod memory_worker;
 mod thread;
 
 /// Env var escape hatch: when set to a truthy value, the `request_user_input`
