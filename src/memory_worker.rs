@@ -10,11 +10,13 @@ use codex_core::config::{Config, ConfigOverrides};
 use codex_memories_write::{PipelineReport, clear_memory_roots_contents, run_memories_pipeline};
 use codex_state::StateRuntime;
 use codex_utils_cli::CliConfigOverrides;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use crate::codex_agent::{ThreadManagerBundle, build_thread_manager_bundle};
 
@@ -91,8 +93,7 @@ async fn run_with_config(
     config: Config,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<PipelineReport> {
-    let pipeline_config = config.clone();
-    with_memory_home_lock(&config, || async move {
+    with_memory_home_lock(config, move |pipeline_config| async move {
         codex_login::default_client::set_default_client_residency_requirement(
             pipeline_config.enforce_residency.value(),
         );
@@ -125,7 +126,16 @@ pub async fn run_memory_clear(cli_config_overrides: CliConfigOverrides) -> anyho
 }
 
 async fn clear_with_config(config: &Config) -> anyhow::Result<()> {
-    with_memory_home_lock(config, || async {
+    clear_with_config_after_lock(config.clone(), || async { Ok(()) }).await
+}
+
+async fn clear_with_config_after_lock<F, Fut>(config: Config, after_lock: F) -> anyhow::Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
+    with_memory_home_lock(config, move |config| async move {
+        after_lock().await?;
         StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_home.as_path()).await?;
         clear_memory_roots_contents(&config.codex_home).await?;
 
@@ -134,31 +144,76 @@ async fn clear_with_config(config: &Config) -> anyhow::Result<()> {
     .await
 }
 
-/// Runs one memory operation while holding the exclusive, process-wide lock for its canonical
-/// Codex home. The operation must use the same configured `codex_home` even when its SQLite
-/// state database is redirected elsewhere, because the pipeline's roots and config identity are
-/// owned by `codex_home`.
+/// One mutex per canonical Codex home prevents two async tasks in this process from relying on
+/// platform-specific same-process file-lock behavior. Entries are weak so homes that are no
+/// longer in use do not accumulate for the life of a desktop process.
+static MEMORY_HOME_MUTEXES: OnceLock<Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
+/// Runs one memory operation while holding the exclusive lock for its canonical Codex home.
+/// The canonicalized config is passed to the operation, so a `CODEX_HOME` symlink retargeted
+/// after lock acquisition cannot make the pipeline and the lock refer to different homes.
 ///
 /// `File::lock` is an OS advisory lock on every supported desktop platform. The lock file is
 /// deliberately outside the cleared `memories*` roots, and the OS releases it when a process
 /// exits or crashes. Acquiring it is blocking work, so it runs on Tokio's blocking pool rather
 /// than occupying an async executor worker.
-async fn with_memory_home_lock<T, F, Fut>(config: &Config, operation: F) -> anyhow::Result<T>
+async fn with_memory_home_lock<T, F, Fut>(config: Config, operation: F) -> anyhow::Result<T>
 where
-    F: FnOnce() -> Fut,
+    F: FnOnce(Config) -> Fut,
     Fut: Future<Output = anyhow::Result<T>>,
 {
-    let _lock = acquire_memory_home_lock(config.codex_home.as_path().to_path_buf()).await?;
-    operation().await
+    let config = canonicalize_memory_config(config).await?;
+    let process_mutex = process_mutex_for_home(config.codex_home.as_path().to_path_buf());
+    // `OwnedMutexGuard` is cancellation-safe: a cancelled waiter never acquires the mutex, and
+    // a cancelled operation drops its guard before another operation can proceed.
+    let _process_guard = process_mutex.lock_owned().await;
+    let _file_lock = acquire_memory_home_lock(config.codex_home.as_path().to_path_buf()).await?;
+    operation(config).await
+}
+
+fn process_mutex_for_home(canonical_home: PathBuf) -> Arc<tokio::sync::Mutex<()>> {
+    let mutexes = MEMORY_HOME_MUTEXES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut mutexes = mutexes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    mutexes.retain(|_, mutex| mutex.strong_count() > 0);
+    match mutexes.entry(canonical_home) {
+        Entry::Occupied(entry) => entry
+            .get()
+            .upgrade()
+            .expect("live mutex entries are retained above"),
+        Entry::Vacant(entry) => {
+            let mutex = Arc::new(tokio::sync::Mutex::new(()));
+            entry.insert(Arc::downgrade(&mutex));
+            mutex
+        }
+    }
+}
+
+async fn canonicalize_memory_config(mut config: Config) -> anyhow::Result<Config> {
+    tokio::task::spawn_blocking(move || {
+        let logical_home = config.codex_home.to_path_buf();
+        std::fs::create_dir_all(&logical_home)?;
+        let canonical_home = std::fs::canonicalize(&logical_home)?;
+
+        // `sqlite_home` defaults to `$CODEX_HOME`, but may also be a configured child of it.
+        // Preserve an explicitly separate sqlite home while moving any home-relative state to the
+        // same canonical root that owns the lock and memory roots.
+        if let Ok(relative_sqlite_home) = config.sqlite_home.strip_prefix(&logical_home) {
+            config.sqlite_home = canonical_home.join(relative_sqlite_home);
+        }
+        config.codex_home = canonical_home.try_into()?;
+        Ok::<_, anyhow::Error>(config)
+    })
+    .await?
 }
 
 async fn acquire_memory_home_lock(codex_home: PathBuf) -> anyhow::Result<File> {
-    Ok(tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&codex_home)?;
-        let canonical_home = std::fs::canonicalize(&codex_home)?;
-        open_and_lock_memory_home(canonical_home.as_path())
-    })
-    .await??)
+    Ok(
+        tokio::task::spawn_blocking(move || open_and_lock_memory_home(codex_home.as_path()))
+            .await??,
+    )
 }
 
 fn open_and_lock_memory_home(canonical_home: &Path) -> std::io::Result<File> {
@@ -182,6 +237,8 @@ mod tests {
     use codex_features::Feature;
     use codex_protocol::{ThreadId, protocol::SessionSource};
     use codex_state::Stage1JobClaimOutcome;
+    use std::process::Command;
+    use std::time::Duration;
 
     async fn test_config(codex_home: PathBuf) -> anyhow::Result<Config> {
         ConfigBuilder::default()
@@ -314,9 +371,17 @@ mod tests {
         tokio::fs::write(memory_root.join("before-run.md"), "old memory").await?;
 
         let runtime = StateRuntime::init(config.sqlite_home.clone(), "test".to_owned()).await?;
+        let original_thread_id = ThreadId::new();
+        let original_parent_thread_id = ThreadId::new();
         let initial_claim = runtime
             .memories()
-            .try_claim_stage1_job(ThreadId::new(), ThreadId::new(), 1, 60, 1)
+            .try_claim_stage1_job(
+                original_thread_id.clone(),
+                original_parent_thread_id.clone(),
+                1,
+                60,
+                1,
+            )
             .await?;
         assert!(matches!(
             initial_claim,
@@ -331,7 +396,7 @@ mod tests {
         let run_entered_for_task = Arc::clone(&run_entered);
         let allow_run_to_write_for_task = Arc::clone(&allow_run_to_write);
         let run = tokio::spawn(async move {
-            with_memory_home_lock(&run_config, || async move {
+            with_memory_home_lock(run_config, |_| async move {
                 run_entered_for_task.wait().await;
                 allow_run_to_write_for_task.wait().await;
                 tokio::fs::write(run_memory_file, "late memory")
@@ -344,15 +409,26 @@ mod tests {
         run_entered.wait().await;
 
         let clear_config = config.clone();
-        let clear = tokio::spawn(async move { clear_with_config(&clear_config).await });
-        tokio::task::yield_now().await;
+        let (clear_entered_tx, mut clear_entered_rx) = tokio::sync::oneshot::channel();
+        let clear = tokio::spawn(async move {
+            clear_with_config_after_lock(clear_config, || async move {
+                clear_entered_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("clear observer dropped"))?;
+                Ok(())
+            })
+            .await
+        });
         assert!(
-            !clear.is_finished(),
-            "clear must wait for the run's home lock before it can delete memory state"
+            tokio::time::timeout(Duration::from_millis(100), &mut clear_entered_rx)
+                .await
+                .is_err(),
+            "clear must not enter its destructive section before the run releases the home lock"
         );
 
         allow_run_to_write.wait().await;
         run.await??;
+        clear_entered_rx.await?;
         clear.await??;
 
         assert!(
@@ -367,11 +443,11 @@ mod tests {
         let runtime = StateRuntime::init(config.sqlite_home.clone(), "test".to_owned()).await?;
         let claim_after_clear = runtime
             .memories()
-            .try_claim_stage1_job(ThreadId::new(), ThreadId::new(), 1, 60, 1)
+            .try_claim_stage1_job(original_thread_id, original_parent_thread_id, 1, 60, 1)
             .await?;
         assert!(
             matches!(claim_after_clear, Stage1JobClaimOutcome::Claimed { .. }),
-            "clear must remove SQLite memory jobs as well as memory roots"
+            "clear must remove the pre-existing SQLite memory job rather than leave it claimed"
         );
         runtime.close().await;
 
@@ -390,7 +466,7 @@ mod tests {
         let release_first_for_task = Arc::clone(&release_first);
 
         let first_task = tokio::spawn(async move {
-            with_memory_home_lock(&first_config, || async move {
+            with_memory_home_lock(first_config, |_| async move {
                 first_entered_for_task.wait().await;
                 release_first_for_task.wait().await;
                 Ok(())
@@ -399,7 +475,7 @@ mod tests {
         });
         first_entered.wait().await;
 
-        with_memory_home_lock(&second_config, || async { Ok(()) }).await?;
+        with_memory_home_lock(second_config, |_| async { Ok(()) }).await?;
         release_first.wait().await;
         first_task.await??;
         Ok(())
@@ -411,13 +487,119 @@ mod tests {
         let config = test_config(tmp.path().to_path_buf()).await?;
         std::fs::create_dir(config.codex_home.join(".memory-worker.lock"))?;
 
-        let err = with_memory_home_lock(&config, || async { Ok(()) })
+        let err = with_memory_home_lock(config, |_| async { Ok(()) })
             .await
             .expect_err("a lock path that is a directory must be reported to the caller");
         assert!(
             err.downcast_ref::<std::io::Error>().is_some(),
             "lock acquisition errors must preserve their I/O cause: {err:#}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn memory_home_lock_helper_process() -> anyhow::Result<()> {
+        let Some(home) = std::env::var_os("CODEX_ACP_MEMORY_LOCK_HELPER_HOME") else {
+            return Ok(());
+        };
+        let home = PathBuf::from(home);
+        let _lock = open_and_lock_memory_home(&home)?;
+        std::fs::write(home.join("helper-ready"), "ready")?;
+        while !home.join("helper-release").exists() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn memory_home_lock_waits_for_a_real_subprocess_lock_holder() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home)?;
+        let mut child = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "memory_worker::tests::memory_home_lock_helper_process",
+                "--nocapture",
+            ])
+            .env("CODEX_ACP_MEMORY_LOCK_HELPER_HOME", &home)
+            .spawn()?;
+
+        let ready = home.join("helper-ready");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !ready.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+
+        let config = test_config(home.clone()).await?;
+        let (waiter_entered_tx, mut waiter_entered_rx) = tokio::sync::oneshot::channel();
+        let waiter = tokio::spawn(async move {
+            with_memory_home_lock(config, |_| async move {
+                waiter_entered_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("waiter observer dropped"))?;
+                Ok(())
+            })
+            .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut waiter_entered_rx)
+                .await
+                .is_err(),
+            "the parent waiter must remain blocked while an independent process holds the file lock"
+        );
+        std::fs::write(home.join("helper-release"), "release")?;
+        assert!(child.wait()?.success(), "lock holder subprocess failed");
+        tokio::time::timeout(Duration::from_secs(5), &mut waiter_entered_rx).await??;
+        waiter.await??;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn memory_home_lock_keeps_pipeline_on_the_home_canonicalized_before_symlink_retarget()
+    -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir()?;
+        let first_home = tmp.path().join("first-home");
+        let second_home = tmp.path().join("second-home");
+        let link = tmp.path().join("codex-home");
+        std::fs::create_dir_all(&first_home)?;
+        std::fs::create_dir_all(&second_home)?;
+        symlink(&first_home, &link)?;
+
+        let config = test_config(link.clone()).await?;
+        let entered = Arc::new(tokio::sync::Barrier::new(2));
+        let release = Arc::new(tokio::sync::Barrier::new(2));
+        let entered_for_task = Arc::clone(&entered);
+        let release_for_task = Arc::clone(&release);
+        let writer = tokio::spawn(async move {
+            with_memory_home_lock(config, move |canonical_config| async move {
+                entered_for_task.wait().await;
+                release_for_task.wait().await;
+                tokio::fs::write(
+                    canonical_config.codex_home.join("written-by-first"),
+                    "first",
+                )
+                .await
+                .map_err(anyhow::Error::from)
+            })
+            .await
+        });
+        entered.wait().await;
+
+        std::fs::remove_file(&link)?;
+        symlink(&second_home, &link)?;
+        let second_config = test_config(link).await?;
+        with_memory_home_lock(second_config, |_| async { Ok(()) }).await?;
+
+        release.wait().await;
+        writer.await??;
+        assert!(first_home.join("written-by-first").exists());
+        assert!(!second_home.join("written-by-first").exists());
         Ok(())
     }
 }
