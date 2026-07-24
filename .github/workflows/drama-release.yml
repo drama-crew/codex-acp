@@ -62,12 +62,22 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           install -m755 "target/${{ matrix.target }}/release/codex-acp" "codex-acp-${{ matrix.target }}"
-          ./codex-acp-${{ matrix.target }} --help >/dev/null 2>&1 || true
-          grep -ac summary "codex-acp-${{ matrix.target }}" || true
+          ./codex-acp-${{ matrix.target }} --help >/dev/null
+          ./codex-acp-${{ matrix.target }} memory-run --help >/dev/null
+          ./codex-acp-${{ matrix.target }} memory-clear --help >/dev/null
       - name: Stage binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Copy-Item "target/${{ matrix.target }}/release/codex-acp.exe" "codex-acp-${{ matrix.target }}.exe"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = ".\\codex-acp-${{ matrix.target }}.exe"
+          Copy-Item "target/${{ matrix.target }}/release/codex-acp.exe" $binary
+          & $binary --help > $null
+          if ($LASTEXITCODE -ne 0) { throw "codex-acp --help failed with exit code $LASTEXITCODE" }
+          & $binary memory-run --help > $null
+          if ($LASTEXITCODE -ne 0) { throw "codex-acp memory-run --help failed with exit code $LASTEXITCODE" }
+          & $binary memory-clear --help > $null
+          if ($LASTEXITCODE -ne 0) { throw "codex-acp memory-clear --help failed with exit code $LASTEXITCODE" }
       - uses: actions/upload-artifact@v4
         with:
           name: codex-acp-${{ matrix.target }}${{ matrix.ext }}
