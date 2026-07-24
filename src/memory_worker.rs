@@ -117,22 +117,52 @@ mod tests {
     use codex_features::Feature;
     use codex_protocol::protocol::SessionSource;
 
-    fn set_codex_home_env(dir: &std::path::Path) {
-        // SAFETY: `CODEX_HOME`/`HOME` are process-wide env vars, so every scenario that touches
-        // them is deliberately folded into the single `memory_worker_end_to_end` test below
-        // (mirroring `default_mode_ask_feature_tests` in `lib.rs`, the crate's existing pattern
-        // for this) and run strictly sequentially against a fresh tempdir per scenario -- `cargo
-        // test`'s default parallel-threads-per-process model means two *separate* test functions
-        // racing to set these globals would nondeterministically point `Config::load_*` calls at
-        // each other's tempdirs (observed while developing this: a config load in one test
-        // picking up a `CODEX_HOME` clobbered mid-flight by another test's setup, making a
-        // `memory-clear` operate on the wrong directory). Do not split this back into multiple
-        // `#[tokio::test]` functions without adding e.g. `serial_test` to keep them from
-        // interleaving.
-        unsafe {
-            std::env::set_var("CODEX_HOME", dir);
-            std::env::set_var("HOME", dir);
+    struct CodexHomeEnvGuard {
+        codex_home: Option<std::ffi::OsString>,
+        home: Option<std::ffi::OsString>,
+    }
+
+    impl CodexHomeEnvGuard {
+        fn set_to(dir: &std::path::Path) -> Self {
+            let guard = Self {
+                codex_home: std::env::var_os("CODEX_HOME"),
+                home: std::env::var_os("HOME"),
+            };
+
+            // SAFETY: this test deliberately serializes its process-wide environment changes.
+            unsafe {
+                std::env::set_var("CODEX_HOME", dir);
+                std::env::set_var("HOME", dir);
+            }
+
+            guard
         }
+    }
+
+    impl Drop for CodexHomeEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: this guard restores the process-wide values it captured before the test
+            // scenario changed them.
+            unsafe {
+                match &self.codex_home {
+                    Some(value) => std::env::set_var("CODEX_HOME", value),
+                    None => std::env::remove_var("CODEX_HOME"),
+                }
+                match &self.home {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+
+    // `CODEX_HOME`/`HOME` are process-wide env vars, so every scenario that touches them is
+    // deliberately folded into the single `memory_worker_end_to_end` test below.
+    //
+    // The guard must be declared after its `TempDir`: Rust drops locals in reverse declaration
+    // order, so it restores the environment before the temporary directory is removed.
+    fn set_codex_home_env(dir: &std::path::Path) -> CodexHomeEnvGuard {
+        CodexHomeEnvGuard::set_to(dir)
     }
 
     /// Wiring check for the Task B5 "Cli 来源" requirement: `build_thread_manager_bundle` (shared
@@ -169,10 +199,13 @@ mod tests {
     /// lives upstream in `codex-memories-extension`'s and `codex-memories-write`'s own tests.
     #[tokio::test]
     async fn memory_worker_end_to_end() -> anyhow::Result<()> {
+        let original_codex_home = std::env::var_os("CODEX_HOME");
+        let original_home = std::env::var_os("HOME");
+
         // --- Scenario 1: extension wiring + sandbox-safe default gating ---
         {
             let tmp = tempfile::tempdir()?;
-            set_codex_home_env(tmp.path());
+            let _env_guard = set_codex_home_env(tmp.path());
 
             let config = load_config(&CliConfigOverrides::default(), None).await?;
             assert!(
@@ -191,7 +224,7 @@ mod tests {
         // --- Scenario 2 (TDD target ②): memory-run with the feature disabled ---
         {
             let tmp = tempfile::tempdir()?;
-            set_codex_home_env(tmp.path());
+            let _env_guard = set_codex_home_env(tmp.path());
 
             let config = load_config(&CliConfigOverrides::default(), None).await?;
             let ThreadManagerBundle {
@@ -215,7 +248,7 @@ mod tests {
         // --- Scenario 3 (TDD target ①): memory-clear empties the on-disk memory roots ---
         {
             let tmp = tempfile::tempdir()?;
-            set_codex_home_env(tmp.path());
+            let _env_guard = set_codex_home_env(tmp.path());
 
             // `CODEX_HOME` gets canonicalized while loading config (see
             // `codex-home/../utils/home-dir`), so read the memories dir back out through a loaded
@@ -236,6 +269,9 @@ mod tests {
                 "expected memories dir to be emptied by memory-clear, found {remaining:?}"
             );
         }
+
+        assert_eq!(std::env::var_os("CODEX_HOME"), original_codex_home);
+        assert_eq!(std::env::var_os("HOME"), original_home);
 
         Ok(())
     }
