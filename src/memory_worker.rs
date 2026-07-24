@@ -16,9 +16,8 @@ use std::sync::Arc;
 
 use crate::codex_agent::{ThreadManagerBundle, build_thread_manager_bundle};
 
-/// Loads config the same way [`crate::run_main`] does, plus applying the process-wide residency
-/// requirement (outbound API calls made from Phase 1/Phase 2 memory extraction sub-agents go
-/// through the same shared HTTP client). Deliberately skips `apply_default_mode_ask_feature`:
+/// Loads config the same way [`crate::run_main`] does. Deliberately skips
+/// `apply_default_mode_ask_feature`:
 /// that toggles exposure of the `request_user_input` tool in ACP-facing "Default" collaboration
 /// mode sessions, which is irrelevant to this headless worker's internal orchestration thread.
 async fn load_config(
@@ -38,10 +37,6 @@ async fn load_config(
         Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, config_overrides)
             .await
             .map_err(|e| anyhow::anyhow!("error loading config: {e}"))?;
-
-    codex_login::default_client::set_default_client_residency_requirement(
-        config.enforce_residency.value(),
-    );
 
     Ok(config)
 }
@@ -79,14 +74,7 @@ pub async fn run_memory_run(
 ) -> anyhow::Result<()> {
     let config = load_config(&cli_config_overrides, codex_linux_sandbox_exe.clone()).await?;
 
-    let ThreadManagerBundle {
-        auth_manager,
-        thread_manager,
-        ..
-    } = build_thread_manager_bundle(&config, codex_linux_sandbox_exe).await?;
-
-    let report = run_memories_pipeline(Arc::new(thread_manager), auth_manager, Arc::new(config))
-        .await?;
+    let report = run_with_config(config, codex_linux_sandbox_exe).await?;
 
     // NOTE: not `println!` -- this crate denies `clippy::print_stdout` (stdout is reserved for
     // the ACP wire protocol in `run_main`'s stdio transport). `write!`/`writeln!` against an
@@ -97,6 +85,23 @@ pub async fn run_memory_run(
     Ok(())
 }
 
+async fn run_with_config(
+    config: Config,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+) -> anyhow::Result<PipelineReport> {
+    codex_login::default_client::set_default_client_residency_requirement(
+        config.enforce_residency.value(),
+    );
+
+    let ThreadManagerBundle {
+        auth_manager,
+        thread_manager,
+        ..
+    } = build_thread_manager_bundle(&config, codex_linux_sandbox_exe).await?;
+
+    run_memories_pipeline(Arc::new(thread_manager), auth_manager, Arc::new(config)).await
+}
+
 /// `codex-acp memory-clear [-c overrides...]`: clears all persisted memory state -- both the
 /// on-disk memory roots under `config.codex_home` (`memories/`, `memories_extensions/`) and the
 /// memories table in the SQLite state DB under `config.sqlite_home` -- and returns `Ok(())` (exit
@@ -105,6 +110,10 @@ pub async fn run_memory_run(
 pub async fn run_memory_clear(cli_config_overrides: CliConfigOverrides) -> anyhow::Result<()> {
     let config = load_config(&cli_config_overrides, None).await?;
 
+    clear_with_config(&config).await
+}
+
+async fn clear_with_config(config: &Config) -> anyhow::Result<()> {
     StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_home.as_path()).await?;
     clear_memory_roots_contents(&config.codex_home).await?;
 
@@ -114,55 +123,45 @@ pub async fn run_memory_clear(cli_config_overrides: CliConfigOverrides) -> anyho
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config::ConfigBuilder;
     use codex_features::Feature;
     use codex_protocol::protocol::SessionSource;
 
-    struct CodexHomeEnvGuard {
-        codex_home: Option<std::ffi::OsString>,
-        home: Option<std::ffi::OsString>,
+    async fn test_config(codex_home: PathBuf) -> anyhow::Result<Config> {
+        ConfigBuilder::default()
+            .codex_home(codex_home)
+            .build()
+            .await
+            .map_err(Into::into)
     }
 
-    impl CodexHomeEnvGuard {
-        fn set_to(dir: &std::path::Path) -> Self {
-            let guard = Self {
-                codex_home: std::env::var_os("CODEX_HOME"),
-                home: std::env::var_os("HOME"),
-            };
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_config_scenario_does_not_expose_a_temporary_home_to_an_observer()
+    -> anyhow::Result<()> {
+        let original_codex_home = std::env::var_os("CODEX_HOME");
+        let original_home = std::env::var_os("HOME");
+        let tmp = tempfile::tempdir()?;
+        let scenario_ready = Arc::new(tokio::sync::Barrier::new(2));
+        let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
 
-            // SAFETY: this test deliberately serializes its process-wide environment changes.
-            unsafe {
-                std::env::set_var("CODEX_HOME", dir);
-                std::env::set_var("HOME", dir);
-            }
+        let observer_ready = Arc::clone(&scenario_ready);
+        let observer = tokio::spawn(async move {
+            observer_ready.wait().await;
+            observed_tx
+                .send((std::env::var_os("CODEX_HOME"), std::env::var_os("HOME")))
+                .expect("scenario waits for the observer result");
+        });
 
-            guard
-        }
-    }
+        let config = test_config(tmp.path().to_path_buf()).await?;
+        scenario_ready.wait().await;
+        let (observed_codex_home, observed_home) = observed_rx.await?;
+        observer.await?;
 
-    impl Drop for CodexHomeEnvGuard {
-        fn drop(&mut self) {
-            // SAFETY: this guard restores the process-wide values it captured before the test
-            // scenario changed them.
-            unsafe {
-                match &self.codex_home {
-                    Some(value) => std::env::set_var("CODEX_HOME", value),
-                    None => std::env::remove_var("CODEX_HOME"),
-                }
-                match &self.home {
-                    Some(value) => std::env::set_var("HOME", value),
-                    None => std::env::remove_var("HOME"),
-                }
-            }
-        }
-    }
+        assert_eq!(observed_codex_home, original_codex_home);
+        assert_eq!(observed_home, original_home);
+        assert_eq!(config.codex_home.as_path(), tmp.path());
 
-    // `CODEX_HOME`/`HOME` are process-wide env vars, so every scenario that touches them is
-    // deliberately folded into the single `memory_worker_end_to_end` test below.
-    //
-    // The guard must be declared after its `TempDir`: Rust drops locals in reverse declaration
-    // order, so it restores the environment before the temporary directory is removed.
-    fn set_codex_home_env(dir: &std::path::Path) -> CodexHomeEnvGuard {
-        CodexHomeEnvGuard::set_to(dir)
+        Ok(())
     }
 
     /// Wiring check for the Task B5 "Cli 来源" requirement: `build_thread_manager_bundle` (shared
@@ -179,8 +178,7 @@ mod tests {
         assert_ne!(SessionSource::Cli, SessionSource::Unknown);
     }
 
-    /// End-to-end coverage for the Task B5 wiring + TDD targets ①② from the task brief, run as
-    /// one sequential test (see `set_codex_home_env`'s SAFETY comment for why):
+    /// End-to-end coverage for the Task B5 wiring + TDD targets ①② from the task brief.
     ///
     /// 1. `build_thread_manager_bundle` installs the memories extension into the registry
     ///    (replacing `empty_extension_registry()`) rather than leaving it empty -- asserted by
@@ -199,15 +197,10 @@ mod tests {
     /// lives upstream in `codex-memories-extension`'s and `codex-memories-write`'s own tests.
     #[tokio::test]
     async fn memory_worker_end_to_end() -> anyhow::Result<()> {
-        let original_codex_home = std::env::var_os("CODEX_HOME");
-        let original_home = std::env::var_os("HOME");
-
         // --- Scenario 1: extension wiring + sandbox-safe default gating ---
         {
             let tmp = tempfile::tempdir()?;
-            let _env_guard = set_codex_home_env(tmp.path());
-
-            let config = load_config(&CliConfigOverrides::default(), None).await?;
+            let config = test_config(tmp.path().to_path_buf()).await?;
             assert!(
                 !config.features.enabled(Feature::MemoryTool),
                 "expected the default config to leave the memories feature disabled"
@@ -224,18 +217,8 @@ mod tests {
         // --- Scenario 2 (TDD target ②): memory-run with the feature disabled ---
         {
             let tmp = tempfile::tempdir()?;
-            let _env_guard = set_codex_home_env(tmp.path());
-
-            let config = load_config(&CliConfigOverrides::default(), None).await?;
-            let ThreadManagerBundle {
-                auth_manager,
-                thread_manager,
-                ..
-            } = build_thread_manager_bundle(&config, None).await?;
-
-            let report =
-                run_memories_pipeline(Arc::new(thread_manager), auth_manager, Arc::new(config))
-                    .await?;
+            let config = test_config(tmp.path().to_path_buf()).await?;
+            let report = run_with_config(config, None).await?;
             assert_eq!(report, PipelineReport::default());
 
             let json = pipeline_report_json(&report);
@@ -248,20 +231,13 @@ mod tests {
         // --- Scenario 3 (TDD target ①): memory-clear empties the on-disk memory roots ---
         {
             let tmp = tempfile::tempdir()?;
-            let _env_guard = set_codex_home_env(tmp.path());
 
-            // `CODEX_HOME` gets canonicalized while loading config (see
-            // `codex-home/../utils/home-dir`), so read the memories dir back out through a loaded
-            // `Config` rather than re-deriving it from `tmp.path()` directly -- on macOS `/var` is
-            // itself a symlink to `/private/var`, and asserting against the pre-canonicalization
-            // path would check a different (if equivalent) path than the one `memory-clear`
-            // actually touched.
-            let config = load_config(&CliConfigOverrides::default(), None).await?;
+            let config = test_config(tmp.path().to_path_buf()).await?;
             let memories_dir = config.codex_home.as_path().join("memories");
             std::fs::create_dir_all(&memories_dir)?;
             std::fs::write(memories_dir.join("MEMORY.md"), "some memory content")?;
 
-            run_memory_clear(CliConfigOverrides::default()).await?;
+            clear_with_config(&config).await?;
 
             let remaining: Vec<_> = std::fs::read_dir(&memories_dir)?.collect();
             assert!(
@@ -269,9 +245,6 @@ mod tests {
                 "expected memories dir to be emptied by memory-clear, found {remaining:?}"
             );
         }
-
-        assert_eq!(std::env::var_os("CODEX_HOME"), original_codex_home);
-        assert_eq!(std::env::var_os("HOME"), original_home);
 
         Ok(())
     }
