@@ -170,9 +170,7 @@ mod tests {
     /// configured default session source directly, so this asserts the source constant itself
     /// stayed `Cli` (guarding against an accidental revert of the `codex_agent.rs` edit) --
     /// behavior-level coverage that a `Cli`-sourced thread is actually eligible for Phase 1
-    /// claiming lives in codex-core's own `INTERACTIVE_SESSION_SOURCES` tests. Doesn't touch
-    /// `CODEX_HOME`/`HOME`, so unlike the scenarios below it's safe to run in parallel with
-    /// anything else in this binary.
+    /// claiming lives in codex-core's own `INTERACTIVE_SESSION_SOURCES` tests.
     #[test]
     fn session_source_cli_is_distinct_from_unknown() {
         assert_ne!(SessionSource::Cli, SessionSource::Unknown);
