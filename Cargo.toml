@@ -74,31 +74,31 @@ tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungsteni
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 
 [patch."https://github.com/openai/codex"]
-# drama: Task B10 immutable fork pin (2026-07-24). Every codex-* crate below resolves to the
-# pushed agent-memory revision, so Cargo has one source for codex-core and all B1-B4 memory
-# deliverables without depending on a local worktree or a moving branch.
+# drama: canonical fork branch. Every codex-* crate below resolves to the
+# Drama-maintained `main` branch, so Cargo has one source for codex-core and
+# all Drama summary, image, and memory deliverables.
 #
 # Cargo `[patch]` overrides are all-or-nothing *per source URL*: codex-core is a transitive
 # dependency of nearly every other codex-* crate here. Hence every single codex-* entry — not
-# just the two new memories crates — is pinned to exactly the same immutable source revision.
-codex-apply-patch = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-arg0 = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-config = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-core = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-exec-server = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-extension-api = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-features = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-home = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-http-client = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-mcp-server = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-memories-extension = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-memories-write = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-models-manager = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-protocol = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-login = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-shell-command = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-state = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-thread-store = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-utils-path-uri = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-utils-approval-presets = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
-codex-utils-cli = { git = "https://github.com/drama-crew/codex", rev = "eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9" }
+# just the two new memories crates — follows `main`.
+codex-apply-patch = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-arg0 = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-config = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-core = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-exec-server = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-extension-api = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-features = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-home = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-http-client = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-mcp-server = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-memories-extension = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-memories-write = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-models-manager = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-protocol = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-login = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-shell-command = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-state = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-thread-store = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-utils-path-uri = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-utils-approval-presets = { git = "https://github.com/drama-crew/codex", branch = "main" }
+codex-utils-cli = { git = "https://github.com/drama-crew/codex", branch = "main" }

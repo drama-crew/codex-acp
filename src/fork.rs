@@ -31,8 +31,8 @@
 //! `core/src/context/world_state/`). This module reimplements the same
 //! *outward* behavior against the public `codex_protocol` wire types, using
 //! the same open/close tag markers and literal-prefix warnings those private
-//! fragment types render (verified by reading the pinned codex source at
-//! `drama-crew/codex@drama/summary-titles-codex-0.144`, commit `be371ba`).
+//! fragment types render (verified against the Drama canonical fork at
+//! `drama-crew/codex@main`).
 //! It is a best-effort mirror, not shared code: if upstream adds a new
 //! contextual-fragment type with a novel marker, this scan will not
 //! automatically recognize it (residual risk accepted in the design doc).

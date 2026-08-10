@@ -407,7 +407,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -418,7 +418,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1824,7 +1824,7 @@ dependencies = [
 [[package]]
 name = "codex-agent-graph-store"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-protocol",
  "codex-state",
@@ -1835,7 +1835,7 @@ dependencies = [
 [[package]]
 name = "codex-agent-identity"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1854,7 +1854,7 @@ dependencies = [
 [[package]]
 name = "codex-analytics"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-app-server-protocol",
  "codex-git-utils",
@@ -1874,7 +1874,7 @@ dependencies = [
 [[package]]
 name = "codex-api"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "async-channel",
  "base64 0.22.1",
@@ -1905,7 +1905,7 @@ dependencies = [
 [[package]]
 name = "codex-app-server-protocol"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "clap",
@@ -1931,7 +1931,7 @@ dependencies = [
 [[package]]
 name = "codex-apply-patch"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-exec-server",
@@ -1947,7 +1947,7 @@ dependencies = [
 [[package]]
 name = "codex-arg0"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
@@ -1967,7 +1967,7 @@ dependencies = [
 [[package]]
 name = "codex-async-utils"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "tokio",
  "tokio-util",
@@ -1976,7 +1976,7 @@ dependencies = [
 [[package]]
 name = "codex-aws-auth"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -1990,7 +1990,7 @@ dependencies = [
 [[package]]
 name = "codex-backend-client"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-api",
@@ -2007,7 +2007,7 @@ dependencies = [
 [[package]]
 name = "codex-backend-openapi-models"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "serde",
  "serde_json",
@@ -2017,7 +2017,7 @@ dependencies = [
 [[package]]
 name = "codex-client"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-http-client",
  "eventsource-stream",
@@ -2030,7 +2030,7 @@ dependencies = [
 [[package]]
 name = "codex-code-mode"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-code-mode-protocol",
  "codex-protocol",
@@ -2046,7 +2046,7 @@ dependencies = [
 [[package]]
 name = "codex-code-mode-protocol"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-protocol",
  "serde",
@@ -2058,12 +2058,12 @@ dependencies = [
 [[package]]
 name = "codex-collaboration-mode-templates"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 
 [[package]]
 name = "codex-config"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2108,7 +2108,7 @@ dependencies = [
 [[package]]
 name = "codex-connectors"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-config",
@@ -2124,7 +2124,7 @@ dependencies = [
 [[package]]
 name = "codex-context-fragments"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-protocol",
  "codex-utils-string",
@@ -2133,7 +2133,7 @@ dependencies = [
 [[package]]
 name = "codex-core"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2236,7 +2236,7 @@ dependencies = [
 [[package]]
 name = "codex-core-plugins"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2280,7 +2280,7 @@ dependencies = [
 [[package]]
 name = "codex-core-skills"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-analytics",
@@ -2313,7 +2313,7 @@ dependencies = [
 [[package]]
 name = "codex-exec-server"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2352,7 +2352,7 @@ dependencies = [
 [[package]]
 name = "codex-exec-server-protocol"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "base64 0.22.1",
  "codex-file-system",
@@ -2367,7 +2367,7 @@ dependencies = [
 [[package]]
 name = "codex-execpolicy"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "clap",
@@ -2383,7 +2383,7 @@ dependencies = [
 [[package]]
 name = "codex-experimental-api-macros"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2393,7 +2393,7 @@ dependencies = [
 [[package]]
 name = "codex-extension-api"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-config",
  "codex-context-fragments",
@@ -2406,7 +2406,7 @@ dependencies = [
 [[package]]
 name = "codex-extension-items"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-utils-absolute-path",
  "schemars 0.8.22",
@@ -2417,7 +2417,7 @@ dependencies = [
 [[package]]
 name = "codex-features"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-otel",
  "codex-protocol",
@@ -2430,7 +2430,7 @@ dependencies = [
 [[package]]
 name = "codex-feedback"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-login",
@@ -2444,7 +2444,7 @@ dependencies = [
 [[package]]
 name = "codex-file-search"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "clap",
@@ -2459,7 +2459,7 @@ dependencies = [
 [[package]]
 name = "codex-file-system"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "bytes",
  "codex-protocol",
@@ -2472,7 +2472,7 @@ dependencies = [
 [[package]]
 name = "codex-git-utils"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2497,7 +2497,7 @@ dependencies = [
 [[package]]
 name = "codex-home"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-extension-api",
  "codex-utils-absolute-path",
@@ -2507,7 +2507,7 @@ dependencies = [
 [[package]]
 name = "codex-hooks"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2529,7 +2529,7 @@ dependencies = [
 [[package]]
 name = "codex-http-client"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "bytes",
  "codex-utils-rustls-provider",
@@ -2555,7 +2555,7 @@ dependencies = [
 [[package]]
 name = "codex-image-generation-extension"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "base64 0.22.1",
  "codex-api",
@@ -2581,7 +2581,7 @@ dependencies = [
 [[package]]
 name = "codex-install-context"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
@@ -2590,7 +2590,7 @@ dependencies = [
 [[package]]
 name = "codex-keyring-store"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "keyring",
  "tracing",
@@ -2599,7 +2599,7 @@ dependencies = [
 [[package]]
 name = "codex-linux-sandbox"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "clap",
  "codex-install-context",
@@ -2621,7 +2621,7 @@ dependencies = [
 [[package]]
 name = "codex-login"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2654,7 +2654,7 @@ dependencies = [
 [[package]]
 name = "codex-mcp"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2687,7 +2687,7 @@ dependencies = [
 [[package]]
 name = "codex-mcp-server"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-arg0",
@@ -2714,7 +2714,7 @@ dependencies = [
 [[package]]
 name = "codex-memories-extension"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-core",
  "codex-extension-api",
@@ -2734,7 +2734,7 @@ dependencies = [
 [[package]]
 name = "codex-memories-read"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-protocol",
  "codex-shell-command",
@@ -2744,7 +2744,7 @@ dependencies = [
 [[package]]
 name = "codex-memories-write"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2776,7 +2776,7 @@ dependencies = [
 [[package]]
 name = "codex-model-provider"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-agent-identity",
  "codex-api",
@@ -2797,7 +2797,7 @@ dependencies = [
 [[package]]
 name = "codex-model-provider-info"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-api",
  "codex-protocol",
@@ -2809,7 +2809,7 @@ dependencies = [
 [[package]]
 name = "codex-models-manager"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "chrono",
  "codex-collaboration-mode-templates",
@@ -2828,7 +2828,7 @@ dependencies = [
 [[package]]
 name = "codex-network-proxy"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2863,7 +2863,7 @@ dependencies = [
 [[package]]
 name = "codex-otel"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "chrono",
  "codex-api",
@@ -2894,7 +2894,7 @@ dependencies = [
 [[package]]
 name = "codex-plugin"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-config",
  "codex-protocol",
@@ -2907,7 +2907,7 @@ dependencies = [
 [[package]]
 name = "codex-process-hardening"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "libc",
 ]
@@ -2915,7 +2915,7 @@ dependencies = [
 [[package]]
 name = "codex-prompts"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-context-fragments",
@@ -2929,7 +2929,7 @@ dependencies = [
 [[package]]
 name = "codex-protocol"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "chardetng",
  "chrono",
@@ -2968,7 +2968,7 @@ dependencies = [
 [[package]]
 name = "codex-response-debug-context"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "base64 0.22.1",
  "codex-api",
@@ -2979,7 +2979,7 @@ dependencies = [
 [[package]]
 name = "codex-rmcp-client"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "axum",
@@ -3016,7 +3016,7 @@ dependencies = [
 [[package]]
 name = "codex-rollout"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3040,7 +3040,7 @@ dependencies = [
 [[package]]
 name = "codex-rollout-trace"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "codex-code-mode",
@@ -3055,7 +3055,7 @@ dependencies = [
 [[package]]
 name = "codex-sandboxing"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-network-proxy",
  "codex-protocol",
@@ -3075,7 +3075,7 @@ dependencies = [
 [[package]]
 name = "codex-secrets"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "age",
  "anyhow",
@@ -3094,7 +3094,7 @@ dependencies = [
 [[package]]
 name = "codex-shell-command"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "base64 0.22.1",
  "codex-protocol",
@@ -3114,7 +3114,7 @@ dependencies = [
 [[package]]
 name = "codex-shell-escalation"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "clap",
@@ -3133,7 +3133,7 @@ dependencies = [
 [[package]]
 name = "codex-skills"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-utils-absolute-path",
  "include_dir",
@@ -3143,7 +3143,7 @@ dependencies = [
 [[package]]
 name = "codex-state"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3166,7 +3166,7 @@ dependencies = [
 [[package]]
 name = "codex-terminal-detection"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "tracing",
 ]
@@ -3174,7 +3174,7 @@ dependencies = [
 [[package]]
 name = "codex-thread-store"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "chrono",
  "codex-git-utils",
@@ -3194,7 +3194,7 @@ dependencies = [
 [[package]]
 name = "codex-tools"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-code-mode",
  "codex-connectors",
@@ -3218,7 +3218,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-absolute-path"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "dirs",
  "dunce",
@@ -3230,7 +3230,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-approval-presets"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-protocol",
 ]
@@ -3238,7 +3238,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-cache"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "lru",
  "sha1 0.10.6",
@@ -3248,7 +3248,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-cli"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "clap",
  "codex-protocol",
@@ -3260,7 +3260,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-home-dir"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-utils-absolute-path",
  "dirs",
@@ -3269,7 +3269,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-image"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "base64 0.22.1",
  "codex-utils-cache",
@@ -3282,7 +3282,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-json-to-toml"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
@@ -3291,7 +3291,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-output-truncation"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-protocol",
  "codex-utils-string",
@@ -3300,7 +3300,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-path"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-utils-absolute-path",
  "dunce",
@@ -3310,7 +3310,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-path-uri"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "base64 0.22.1",
  "codex-utils-absolute-path",
@@ -3325,7 +3325,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-plugins"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-exec-server",
  "codex-utils-absolute-path",
@@ -3337,7 +3337,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-pty"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "filedescriptor",
@@ -3353,7 +3353,7 @@ dependencies = [
 [[package]]
 name = "codex-utils-rustls-provider"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "rustls",
 ]
@@ -3361,12 +3361,12 @@ dependencies = [
 [[package]]
 name = "codex-utils-stream-parser"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 
 [[package]]
 name = "codex-utils-string"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "regex-lite",
  "serde",
@@ -3376,12 +3376,12 @@ dependencies = [
 [[package]]
 name = "codex-utils-template"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 
 [[package]]
 name = "codex-websocket-client"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "codex-http-client",
  "futures",
@@ -3395,7 +3395,7 @@ dependencies = [
 [[package]]
 name = "codex-windows-sandbox"
 version = "0.144.3"
-source = "git+https://github.com/drama-crew/codex?rev=eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9#eb9584aa7b5095c4288d354a05d03ab3b1f0b0e9"
+source = "git+https://github.com/drama-crew/codex?branch=main#18920628d302aa076abcb86b28b77f92c59e5f5f"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4182,7 +4182,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4484,7 +4484,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6363,7 +6363,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -7645,7 +7645,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8697,7 +8697,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -8735,7 +8735,7 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -9588,7 +9588,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9647,7 +9647,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10478,7 +10478,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11051,7 +11051,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11104,7 +11104,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11789,7 +11789,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12342,7 +12342,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
