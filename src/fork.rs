@@ -33,66 +33,49 @@
 //! the same open/close tag markers and literal-prefix warnings those private
 //! fragment types render (verified against the Drama canonical fork at
 //! `drama-crew/codex@main`).
-//! It is a best-effort mirror, not shared code: if upstream adds a new
-//! contextual-fragment type with a novel marker, this scan will not
-//! automatically recognize it (residual risk accepted in the design doc).
+//! # Resolved: this is no longer a mirror
 //!
-//! # Failure mode: silent mis-truncation, not a clean error
+//! This module used to re-derive "which `role: "user"` rollout messages are
+//! real user turns" from a hand-maintained table of contextual-fragment
+//! markers, because codex-core's own boundary scan was private. That mirror
+//! had a nasty failure mode, and it is worth keeping the description because
+//! it is exactly what any reintroduced mirror would do again:
 //!
-//! Because `k` (the fork index we compute here, from our mirror) and the
-//! actual truncation (`ForkSnapshot::TruncateBeforeNthUserMessage(k)`,
-//! executed inside codex-core against *its own* private,
-//! `event_mapping`/`contextual_user_message`-based boundary scan) are two
-//! independently-written classifiers running over the same rollout, a drift
-//! between them -- e.g. codex-core adds a new contextual-fragment marker
-//! this mirror doesn't know about, or classifies an edge case (an empty
-//! text fragment, a mixed contextual+real-text message, ...) differently --
-//! does **not** surface as a request failure. Both classifiers always
-//! produce *some* integer index; if the two integers disagree, the fork
-//! silently succeeds against the *wrong* cut point: it may keep one turn
-//! too many/few, or in the injected-fragment case, treat an
-//! agent-visible-but-not-user-authored message as if the user said it (or
-//! vice versa). There is no exception to catch and no assertion to fail --
-//! this is a quiet correctness bug in the new session's seeded memory, not
-//! a crash.
+//! `k` (the fork index computed here) and the actual truncation
+//! (`ForkSnapshot::TruncateBeforeNthUserMessage(k)`, executed inside
+//! codex-core against its own boundary scan) are applied by two different
+//! pieces of code over the same rollout. If they disagree, nothing fails --
+//! both always produce *some* integer. The fork silently succeeds against the
+//! **wrong** cut point: one turn too many or too few, or an injected
+//! context fragment treated as something the user said. No exception to
+//! catch, no assertion to trip; just a quiet correctness bug in the new
+//! session's seeded history.
 //!
-//! We evaluated adding a runtime cross-check (re-derive the cut point a
-//! second way after the real fork and compare) but found no way to do it
-//! without spawning the destination thread and reading its persisted
-//! rollout back (`CodexThread::rollout_path` +
-//! `RolloutRecorder::get_rollout_history`, both already used elsewhere in
-//! this crate) -- codex-core's own boundary computation
-//! (`fork_history_from_snapshot` and everything it calls) is
-//! `pub(crate)`/private with no public API that returns "here is the index
-//! I actually cut at." Reading the persisted rollout back would require the
-//! fork to have already fully completed and its rollout
-//! materialized/flushed to disk (`CodexThread::ensure_rollout_materialized`
-//! / `flush_rollout`, timing not guaranteed synchronous with
-//! `fork_thread_from_history` returning), and even then would only detect
-//! drift *after* an unrecoverable side effect (a new thread has already
-//! been spawned with the wrong history; there's no "undo" -- see the
-//! `source_busy` vs. `fork_failed` split in this module for the same
-//! "can't fully roll back a partially-completed fork" constraint). Building
-//! and testing that safely is a much larger change than this fix pass's
-//! scope, and it would still only be a runtime *detector*, not a
-//! *preventer* -- so we do not attempt it here. Instead, the enforcement is
-//! upstream, at diff-review time: see `DRAMA_FORK.md`'s "Tracking workflow"
-//! for the **mandatory** step added there requiring a manual diff between
-//! upstream's `CONTEXTUAL_USER_FRAGMENTS`/`is_contextual_user_message_content`
-//! and this module's `CONTEXTUAL_USER_TAG_PREFIXES`/`is_contextual_user_text`
-//! on every codex-core version bump, plus a real-binary fork e2e run before
-//! release.
-
+//! That risk is now removed at the root: `classify_user_message` calls
+//! `codex_core::parse_turn_item`, which is the exact predicate
+//! `core/src/thread_rollout_truncation.rs::user_message_positions_in_rollout`
+//! uses. Same code, same answer, by construction.
+//!
+//! Two concrete bugs the old mirror had, found by
+//! `mirror_agrees_with_codex_core_classifier` when it was first written --
+//! both silent, both in the "fork at the wrong message" class:
+//!
+//! - it matched only a **prefix**, while codex-core's `matches_marked_text`
+//!   requires the opening *and* closing marker. A user message that merely
+//!   started with `<environment_context>` counted for codex-core but not for
+//!   the mirror.
+//! - it matched **case-sensitively**; codex-core compares
+//!   `eq_ignore_ascii_case`.
+//!
+//! If you are ever tempted to reintroduce a local classifier for performance
+//! or to avoid the codex-core dependency: don't. The differential test will
+//! stop you, and it is there for this reason.
+//!
 use agent_client_protocol::schema::{McpServer, SessionId};
 use agent_client_protocol::{JsonRpcRequest, JsonRpcResponse};
-use codex_protocol::items::parse_hook_prompt_fragment;
-use codex_protocol::models::{ContentItem, ResponseItem};
 use codex_history::RolloutItem;
-use codex_protocol::protocol::{
-    APPS_INSTRUCTIONS_OPEN_TAG, COLLABORATION_MODE_OPEN_TAG, CONTEXT_WINDOW_GUIDANCE_OPEN_TAG,
-    CONTEXT_WINDOW_OPEN_TAG, ENVIRONMENT_CONTEXT_OPEN_TAG, EventMsg, MULTI_AGENT_MODE_OPEN_TAG,
-    PLUGINS_INSTRUCTIONS_OPEN_TAG, REALTIME_CONVERSATION_OPEN_TAG, SKILLS_INSTRUCTIONS_OPEN_TAG,
-};
+use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_protocol::protocol::EventMsg;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -207,69 +190,6 @@ pub struct ForkSessionResponse {
     pub matched_index: usize,
 }
 
-/// Contextual open-tag markers for `role: "user"` rollout messages that are
-/// injected context rather than something the user actually typed, mirrored
-/// from the private fragment registry in
-/// `core/src/context/contextual_user_message.rs::CONTEXTUAL_USER_FRAGMENTS`
-/// (environment context, apps/skills/plugins instructions, collaboration &
-/// multi-agent mode banners, realtime-conversation banner, context-window
-/// guidance, additional-context key/value fragments, user shell command
-/// echoes, turn-aborted/subagent notifications, recommended-plugins list,
-/// and the internal-model-context wrapper).
-const CONTEXTUAL_USER_TAG_PREFIXES: &[&str] = &[
-    ENVIRONMENT_CONTEXT_OPEN_TAG,
-    SKILLS_INSTRUCTIONS_OPEN_TAG,
-    APPS_INSTRUCTIONS_OPEN_TAG,
-    PLUGINS_INSTRUCTIONS_OPEN_TAG,
-    COLLABORATION_MODE_OPEN_TAG,
-    MULTI_AGENT_MODE_OPEN_TAG,
-    REALTIME_CONVERSATION_OPEN_TAG,
-    CONTEXT_WINDOW_OPEN_TAG,
-    CONTEXT_WINDOW_GUIDANCE_OPEN_TAG,
-    "# AGENTS.md instructions", // UserInstructions fragment marker
-    "<external_",               // AdditionalContextUserFragment: <external_KEY>...</external_KEY>
-    "<user_shell_command>",
-    "<turn_aborted>",
-    "<subagent_notification>",
-    "<recommended_plugins>",
-    "<codex_internal_context", // InternalModelContextFragment (has attrs after the tag name)
-    "<goal_context>",          // legacy InternalModelContextFragment wrapper
-];
-
-/// Literal-prefix legacy warning fragments (no wrapper tags), mirrored from
-/// `core/src/context/legacy_*_warning.rs`.
-const CONTEXTUAL_USER_LITERAL_PREFIXES: &[&str] = &[
-    "Warning: The maximum number of unified exec processes you can keep open is",
-    "Warning: Your account was flagged for potentially high-risk cyber activity",
-];
-
-fn is_legacy_apply_patch_warning(trimmed: &str) -> bool {
-    trimmed.starts_with("Warning: apply_patch was requested via ")
-        && trimmed.ends_with("Use the apply_patch tool instead of exec_command.")
-}
-
-/// True when a single `ContentItem::InputText` fragment of a `role: "user"`
-/// rollout message is injected context rather than user-authored text.
-fn is_contextual_user_text(text: &str) -> bool {
-    if parse_hook_prompt_fragment(text).is_some() {
-        return true;
-    }
-    let trimmed = text.trim_start();
-    if CONTEXTUAL_USER_TAG_PREFIXES
-        .iter()
-        .any(|prefix| trimmed.starts_with(prefix))
-    {
-        return true;
-    }
-    if CONTEXTUAL_USER_LITERAL_PREFIXES
-        .iter()
-        .any(|prefix| trimmed.starts_with(prefix))
-    {
-        return true;
-    }
-    is_legacy_apply_patch_warning(trimmed)
-}
-
 /// Concatenate a message's text content items (skipping non-text parts like
 /// images) the same way a fork anchor's `text` is expected to be rendered
 /// (one user-visible string per rollout user message).
@@ -284,16 +204,6 @@ fn message_text(content: &[ContentItem]) -> String {
         .join("\n")
 }
 
-/// True if any content item is a contextual fragment (mirrors codex-core's
-/// `is_contextual_user_message_content`, which short-circuits the *whole*
-/// message as non-counting if *any* fragment is contextual).
-fn is_contextual_user_message(content: &[ContentItem]) -> bool {
-    content.iter().any(|item| match item {
-        ContentItem::InputText { text } => is_contextual_user_text(text),
-        _ => false,
-    })
-}
-
 /// If `item` is a genuine (non-contextual) `role: "user"` rollout message,
 /// return its rendered text. A multimodal message (text + image(s)) still
 /// counts as exactly one user message, per the design's "多模态一条计一"
@@ -301,17 +211,31 @@ fn is_contextual_user_message(content: &[ContentItem]) -> bool {
 /// string.
 fn classify_user_message(item: &RolloutItem) -> Option<String> {
     // Upstream 0.152 wraps the persisted response item in a `ResponseItemEnvelope`
-    // (item + harness metadata); the classification still keys off the item itself.
+    // (item + harness metadata); the classification keys off the item itself.
     let RolloutItem::ResponseItem(envelope) = item else {
         return None;
     };
-    let ResponseItem::Message { role, content, .. } = &envelope.item else {
+    let ResponseItem::Message { content, .. } = &envelope.item else {
         return None;
     };
-    if role != "user" {
-        return None;
-    }
-    if is_contextual_user_message(content) {
+    // Ask codex-core itself rather than re-deriving the answer. This is the exact
+    // predicate `core/src/thread_rollout_truncation.rs::user_message_positions_in_rollout`
+    // uses, so the index we compute here cannot drift from the index the real
+    // truncation applies -- see this module's header for why drift here corrupts
+    // silently instead of erroring.
+    //
+    // The header used to say codex-core's boundary computation was private with no
+    // public API. That is no longer true: `parse_turn_item` is re-exported from
+    // codex-core's crate root, so the text-marker mirror it forced is obsolete.
+    // Keeping the mirror was actively harmful -- it matched only a case-sensitive
+    // *prefix*, while codex-core's `matches_marked_text` requires the opening AND
+    // closing marker, case-insensitively. A user message that merely *starts* with
+    // `<environment_context>` counted for codex-core but not for the mirror, which
+    // is exactly the "fork one user message too early, silently" failure mode.
+    if !matches!(
+        codex_core::parse_turn_item(&envelope.item),
+        Some(codex_protocol::items::TurnItem::UserMessage(_))
+    ) {
         return None;
     }
     Some(message_text(content))
@@ -429,7 +353,53 @@ pub fn warn_on_nth_hint_mismatch(nth_hint: Option<usize>, source_session_id: &st
 mod tests {
     use super::*;
     use codex_history::ResponseItemEnvelope;
-    use codex_protocol::protocol::ThreadRolledBackEvent;
+    use codex_protocol::protocol::{
+        APPS_INSTRUCTIONS_OPEN_TAG, COLLABORATION_MODE_OPEN_TAG, CONTEXT_WINDOW_GUIDANCE_OPEN_TAG,
+        CONTEXT_WINDOW_OPEN_TAG, ENVIRONMENT_CONTEXT_OPEN_TAG, MULTI_AGENT_MODE_OPEN_TAG,
+        PLUGINS_INSTRUCTIONS_OPEN_TAG, REALTIME_CONVERSATION_OPEN_TAG,
+        SKILLS_INSTRUCTIONS_OPEN_TAG, ThreadRolledBackEvent,
+    };
+
+    /// Contextual open-tag markers for `role: "user"` rollout messages that are
+    /// injected context rather than something the user actually typed.
+    ///
+    /// **No longer used for classification** -- `classify_user_message` asks
+    /// codex-core directly. These are kept solely as the corpus for
+    /// `mirror_agrees_with_codex_core_classifier`, which pins that agreement so a
+    /// future refactor cannot quietly reintroduce a hand-rolled mirror. Originally
+    /// transcribed from the fragment registry in
+    /// `core/src/context/contextual_user_message.rs::CONTEXTUAL_USER_FRAGMENTS`
+    /// (environment context, apps/skills/plugins instructions, collaboration &
+    /// multi-agent mode banners, realtime-conversation banner, context-window
+    /// guidance, additional-context key/value fragments, user shell command
+    /// echoes, turn-aborted/subagent notifications, recommended-plugins list,
+    /// and the internal-model-context wrapper).
+    const CONTEXTUAL_USER_TAG_PREFIXES: &[&str] = &[
+        ENVIRONMENT_CONTEXT_OPEN_TAG,
+        SKILLS_INSTRUCTIONS_OPEN_TAG,
+        APPS_INSTRUCTIONS_OPEN_TAG,
+        PLUGINS_INSTRUCTIONS_OPEN_TAG,
+        COLLABORATION_MODE_OPEN_TAG,
+        MULTI_AGENT_MODE_OPEN_TAG,
+        REALTIME_CONVERSATION_OPEN_TAG,
+        CONTEXT_WINDOW_OPEN_TAG,
+        CONTEXT_WINDOW_GUIDANCE_OPEN_TAG,
+        "# AGENTS.md instructions", // UserInstructions fragment marker
+        "<external_", // AdditionalContextUserFragment: <external_KEY>...</external_KEY>
+        "<user_shell_command>",
+        "<turn_aborted>",
+        "<subagent_notification>",
+        "<recommended_plugins>",
+        "<codex_internal_context", // InternalModelContextFragment (has attrs after the tag name)
+        "<goal_context>",          // legacy InternalModelContextFragment wrapper
+    ];
+
+    /// Literal-prefix legacy warning fragments (no wrapper tags), mirrored from
+    /// `core/src/context/legacy_*_warning.rs`.
+    const CONTEXTUAL_USER_LITERAL_PREFIXES: &[&str] = &[
+        "Warning: The maximum number of unified exec processes you can keep open is",
+        "Warning: Your account was flagged for potentially high-risk cyber activity",
+    ];
 
     /// Wrap a bare `ResponseItem` the way persistence does since upstream 0.152.
     fn rollout(item: ResponseItem) -> RolloutItem {
@@ -720,6 +690,74 @@ mod tests {
         // No hint at all is never a mismatch (diagnostic-only field).
         assert!(!nth_hint_mismatches(None, 0));
         assert!(!nth_hint_mismatches(None, 7));
+    }
+
+    /// Differential guard against the failure mode this module's header warns
+    /// about: our text-marker mirror silently disagreeing with codex-core about
+    /// which rollout `role: "user"` messages count, which forks at the wrong
+    /// boundary rather than erroring.
+    ///
+    /// `DRAMA_FORK.md` prescribes a **manual** diff of codex-core's private
+    /// fragment registry against `CONTEXTUAL_USER_TAG_PREFIXES` on every codex
+    /// bump. That check is only as good as whoever remembers to do it. Since
+    /// codex-core re-exports the real classifier (`codex_core::parse_turn_item`,
+    /// which is exactly what `user_message_positions_in_rollout` keys off), we
+    /// can assert the agreement automatically instead — a new upstream fragment
+    /// type this mirror does not know about now fails here, at `cargo test`,
+    /// instead of silently mis-truncating someone's forked session.
+    #[test]
+    fn mirror_agrees_with_codex_core_classifier() {
+        // codex-core's own answer for a rollout item: does it count as a user
+        // message boundary? (Hook prompts parse to TurnItem::HookPrompt and are
+        // deliberately NOT counted -- same as upstream.)
+        fn codex_core_counts_it(item: &RolloutItem) -> bool {
+            let RolloutItem::ResponseItem(envelope) = item else {
+                return false;
+            };
+            matches!(
+                codex_core::parse_turn_item(&envelope.item),
+                Some(codex_protocol::items::TurnItem::UserMessage(_))
+            )
+        }
+
+        let mut corpus: Vec<(&str, RolloutItem)> = vec![
+            ("plain user text", user_message("hello there")),
+            ("assistant message", agent_message("hi")),
+            ("empty user text", user_message("")),
+            ("whitespace-only user text", user_message("   \n  ")),
+            (
+                "user text that merely mentions a tag",
+                user_message("I saw <environment_context> in the logs"),
+            ),
+        ];
+
+        // Every marker the mirror claims makes a message contextual must also be
+        // contextual to codex-core.
+        for prefix in CONTEXTUAL_USER_TAG_PREFIXES {
+            corpus.push((prefix, contextual_user_message(&format!("{prefix}body"))));
+        }
+        for prefix in CONTEXTUAL_USER_LITERAL_PREFIXES {
+            corpus.push((prefix, contextual_user_message(&format!("{prefix} 12"))));
+        }
+        corpus.push((
+            "legacy apply_patch warning",
+            contextual_user_message(
+                "Warning: apply_patch was requested via the shell. \
+                 Use the apply_patch tool instead of exec_command.",
+            ),
+        ));
+
+        for (label, item) in &corpus {
+            let ours = classify_user_message(item).is_some();
+            let theirs = codex_core_counts_it(item);
+            assert_eq!(
+                ours, theirs,
+                "mirror disagrees with codex-core for {label:?}: mirror counts it = {ours}, \
+                 codex-core counts it = {theirs}. If codex-core gained a contextual-fragment \
+                 type, add its marker to CONTEXTUAL_USER_TAG_PREFIXES; if it dropped one, \
+                 remove it. Leaving them out of sync forks at the wrong user message.",
+            );
+        }
     }
 
     #[test]

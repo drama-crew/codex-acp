@@ -35,7 +35,6 @@ use codex_login::auth::AuthManager;
 use codex_models_manager::manager::{ModelsManager, RefreshStrategy};
 use codex_protocol::{
     ResponseItemId,
-    review_format::format_review_findings_block,
     approvals::{
         ElicitationRequest, ElicitationRequestEvent, GuardianAssessmentAction,
         GuardianCommandSource,
@@ -57,22 +56,20 @@ use codex_protocol::{
     },
     plan_tool::{PlanItemArg, StepStatus, UpdatePlanArgs},
     protocol::{
-        AgentMessageContentDeltaEvent, AgentMessageEvent,
-        AgentReasoningEvent, AgentReasoningRawContentEvent, AgentReasoningSectionBreakEvent,
+        AgentMessageContentDeltaEvent, AgentMessageEvent, AgentReasoningEvent,
+        AgentReasoningRawContentEvent, AgentReasoningSectionBreakEvent,
         ApplyPatchApprovalRequestEvent, AskForApproval, AuthRecoveryEvent,
-        DynamicToolCallResponseEvent,
-        ElicitationAction, EnteredReviewModeEvent,
-        ErrorEvent, Event, EventMsg, ExecApprovalRequestEvent, ExecCommandBeginEvent,
-        ExecCommandEndEvent, ExecCommandOutputDeltaEvent, ExecCommandStatus, ExitedReviewModeEvent,
-        FileChange, GuardianAssessmentEvent, GuardianAssessmentStatus, ImageGenerationBeginEvent,
+        DynamicToolCallResponseEvent, ElicitationAction, EnteredReviewModeEvent, ErrorEvent, Event,
+        EventMsg, ExecApprovalRequestEvent, ExecCommandBeginEvent, ExecCommandEndEvent,
+        ExecCommandOutputDeltaEvent, ExecCommandStatus, ExitedReviewModeEvent, FileChange,
+        GuardianAssessmentEvent, GuardianAssessmentStatus, ImageGenerationBeginEvent,
         ImageGenerationEndEvent, ItemCompletedEvent, ItemStartedEvent, McpInvocation,
         McpStartupCompleteEvent, McpStartupUpdateEvent, McpToolCallBeginEvent, McpToolCallEndEvent,
-        ModelRerouteEvent, NetworkApprovalContext, NetworkPolicyRuleAction,
-        NonSteerableTurnKind, Op,
-        PatchApplyBeginEvent, PatchApplyEndEvent, PatchApplyStatus, PatchApplyUpdatedEvent,
+        ModelRerouteEvent, NetworkApprovalContext, NetworkPolicyRuleAction, NonSteerableTurnKind,
+        Op, PatchApplyBeginEvent, PatchApplyEndEvent, PatchApplyStatus, PatchApplyUpdatedEvent,
         ReasoningContentDeltaEvent, ReasoningRawContentDeltaEvent, RequestUserInputEvent,
-        ReviewDecision, ReviewOutputEvent, ReviewRequest, ReviewTarget,
-        StreamErrorEvent, TerminalInteractionEvent, ThreadGoalStatus, ThreadGoalUpdatedEvent,
+        ReviewDecision, ReviewOutputEvent, ReviewRequest, ReviewTarget, StreamErrorEvent,
+        TerminalInteractionEvent, ThreadGoalStatus, ThreadGoalUpdatedEvent,
         ThreadSettingsOverrides, TokenCountEvent, TurnAbortedEvent, TurnCompleteEvent,
         TurnStartedEvent, UserMessageEvent, ViewImageToolCallEvent, WarningEvent,
         WebSearchBeginEvent, WebSearchEndEvent,
@@ -82,6 +79,7 @@ use codex_protocol::{
         RequestPermissionsResponse,
     },
     request_user_input::RequestUserInputResponse,
+    review_format::format_review_findings_block,
     turn_input::TurnInputMode,
     user_input::UserInput,
 };
@@ -3534,7 +3532,10 @@ impl<A: Auth> ThreadActor<A> {
             );
         }
 
-        let presets = self.models_manager.list_models(self.config.http_client_factory()).await;
+        let presets = self
+            .models_manager
+            .list_models(self.config.http_client_factory())
+            .await;
 
         let current_model = self.get_current_model().await;
         let current_preset = presets.iter().find(|p| p.model == current_model).cloned();
@@ -3646,7 +3647,10 @@ impl<A: Auth> ThreadActor<A> {
     async fn handle_set_config_model(&mut self, value: SessionConfigValueId) -> Result<(), Error> {
         let model_id = value.0;
 
-        let presets = self.models_manager.list_models(self.config.http_client_factory()).await;
+        let presets = self
+            .models_manager
+            .list_models(self.config.http_client_factory())
+            .await;
         let preset = presets.iter().find(|p| p.id.as_str() == &*model_id);
 
         let model_to_use = preset
@@ -3699,7 +3703,10 @@ impl<A: Auth> ThreadActor<A> {
             serde_json::from_value(value.0.as_ref().into()).map_err(|_| Error::invalid_params())?;
 
         let current_model = self.get_current_model().await;
-        let presets = self.models_manager.list_models(self.config.http_client_factory()).await;
+        let presets = self
+            .models_manager
+            .list_models(self.config.http_client_factory())
+            .await;
         let Some(preset) = presets.iter().find(|p| p.model == current_model) else {
             return Err(Error::invalid_params()
                 .data("Reasoning effort can only be set for known model presets"));
@@ -3981,7 +3988,9 @@ impl<A: Auth> ThreadActor<A> {
     }
 
     async fn get_current_model(&self) -> String {
-        self.models_manager.get_model(&self.config.model, self.config.http_client_factory()).await
+        self.models_manager
+            .get_model(&self.config.model, self.config.http_client_factory())
+            .await
     }
 
     async fn handle_cancel(&mut self) -> Result<(), Error> {
@@ -4345,18 +4354,18 @@ impl<A: Auth> ThreadActor<A> {
                             .unwrap_or_else(|| generate_fallback_id("image_generation")),
                         "Image generation",
                     )
-                        .kind(ToolKind::Other)
-                        .status(image_generation_tool_status(status))
-                        .content(image_generation_content(
-                            revised_prompt.clone(),
-                            result.clone(),
-                            None,
-                        ))
-                        .raw_output(serde_json::json!({
-                            "status": status,
-                            "revised_prompt": revised_prompt,
-                            "result": result,
-                        })),
+                    .kind(ToolKind::Other)
+                    .status(image_generation_tool_status(status))
+                    .content(image_generation_content(
+                        revised_prompt.clone(),
+                        result.clone(),
+                        None,
+                    ))
+                    .raw_output(serde_json::json!({
+                        "status": status,
+                        "revised_prompt": revised_prompt,
+                        "result": result,
+                    })),
                 );
             }
             // Skip GhostSnapshot, Compaction, Other, LocalShellCall without call_id
@@ -4426,9 +4435,7 @@ fn not_submitted_reason_to_prompt_error(reason: NotSubmittedReason) -> Error {
         NotSubmittedReason::NotIdle => {
             Error::internal_error().data("a turn is already in progress on this thread")
         }
-        NotSubmittedReason::EmptyInput => {
-            Error::invalid_params().data("prompt must not be empty")
-        }
+        NotSubmittedReason::EmptyInput => Error::invalid_params().data("prompt must not be empty"),
         other => Error::internal_error().data(format!("turn input was not submitted: {other:?}")),
     }
 }
@@ -5154,7 +5161,10 @@ mod tests {
                 drama_preset.active_permission_profile,
                 builtin_preset.active_permission_profile
             );
-            assert_eq!(drama_preset.permission_profile, builtin_preset.permission_profile);
+            assert_eq!(
+                drama_preset.permission_profile,
+                builtin_preset.permission_profile
+            );
         }
 
         let preset = APPROVAL_PRESETS
@@ -5162,7 +5172,10 @@ mod tests {
             .find(|preset| preset.id == "workspace-full-auto")
             .expect("workspace-full-auto preset should be registered");
         assert!(matches!(preset.approval, AskForApproval::Never));
-        assert_eq!(preset.permission_profile, PermissionProfile::workspace_write());
+        assert_eq!(
+            preset.permission_profile,
+            PermissionProfile::workspace_write()
+        );
         assert_eq!(
             preset.active_permission_profile,
             ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
@@ -5206,7 +5219,10 @@ mod tests {
         assert_eq!(mode_id.0.as_ref(), "auto");
 
         // :workspace + Never -> "workspace-full-auto".
-        config.permissions.approval_policy.set(AskForApproval::Never)?;
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::Never)?;
         config
             .permissions
             .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
@@ -5259,7 +5275,10 @@ mod tests {
         // :workspace + Never (legacy setter, as `handle_set_mode` leaves it
         // after resolving the "workspace-full-auto" preset) ->
         // "workspace-full-auto".
-        config.permissions.approval_policy.set(AskForApproval::Never)?;
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::Never)?;
         config
             .permissions
             .set_permission_profile(PermissionProfile::workspace_write())?;
@@ -5349,7 +5368,8 @@ mod tests {
     /// against `AbsolutePathBuf`-normalized entries is exact (macOS
     /// `/var` -> `/private/var`).
     fn boot_profile_with_carveouts_fixture() -> (PathBuf, PathBuf) {
-        let fixture_root = std::env::temp_dir().join(format!("codex-acp-setmode-{}", Uuid::new_v4()));
+        let fixture_root =
+            std::env::temp_dir().join(format!("codex-acp-setmode-{}", Uuid::new_v4()));
         let ext_root = fixture_root.join("ext");
         std::fs::create_dir_all(ext_root.join(".git")).expect("create fixture dirs");
         let fixture_root = std::fs::canonicalize(&fixture_root).expect("canonicalize fixture");
@@ -5427,12 +5447,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_set_mode_auto_preserves_boot_writable_roots_and_network()
-    -> anyhow::Result<()> {
+    async fn handle_set_mode_auto_preserves_boot_writable_roots_and_network() -> anyhow::Result<()>
+    {
         let config = config_with_boot_profile(PermissionProfile::workspace_write()).await?;
         let extra_root = config.codex_home.as_path().join("external-project");
-        let boot_profile =
-            boot_workspace_write_profile(&[write_entry(extra_root.clone())], true);
+        let boot_profile = boot_workspace_write_profile(&[write_entry(extra_root.clone())], true);
         let config = config_with_boot_profile(boot_profile.clone()).await?;
 
         let permission_profile = set_mode_submitted_profile(config, "auto").await?;
@@ -5459,12 +5478,10 @@ mod tests {
     -> anyhow::Result<()> {
         let config = config_with_boot_profile(PermissionProfile::workspace_write()).await?;
         let extra_root = config.codex_home.as_path().join("external-project");
-        let boot_profile =
-            boot_workspace_write_profile(&[write_entry(extra_root.clone())], true);
+        let boot_profile = boot_workspace_write_profile(&[write_entry(extra_root.clone())], true);
         let config = config_with_boot_profile(boot_profile.clone()).await?;
 
-        let permission_profile =
-            set_mode_submitted_profile(config, "workspace-full-auto").await?;
+        let permission_profile = set_mode_submitted_profile(config, "workspace-full-auto").await?;
 
         assert_eq!(
             permission_profile.network_sandbox_policy(),
@@ -5535,8 +5552,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_set_mode_read_only_ignores_boot_workspace_write_extras() -> anyhow::Result<()>
-    {
+    async fn handle_set_mode_read_only_ignores_boot_workspace_write_extras() -> anyhow::Result<()> {
         let config = config_with_boot_profile(PermissionProfile::workspace_write()).await?;
         let extra_root = config.codex_home.as_path().join("external-project");
         let config = config_with_boot_profile(boot_workspace_write_profile(
@@ -5582,7 +5598,10 @@ mod tests {
                 applied, preset.permission_profile,
                 "{mode_id}: applied profile must differ from the pristine preset when boot has extras"
             );
-            assert_eq!(applied.network_sandbox_policy(), NetworkSandboxPolicy::Enabled);
+            assert_eq!(
+                applied.network_sandbox_policy(),
+                NetworkSandboxPolicy::Enabled
+            );
             assert!(
                 has_write_entry_for(&applied, &extra_root),
                 "{mode_id}: applied profile must include the boot extra root"
@@ -5666,7 +5685,9 @@ mod tests {
     async fn capture_boot_workspace_write_profile_clones_workspace_write_boot_profile()
     -> anyhow::Result<()> {
         let boot_profile = PermissionProfile::workspace_write_with(
-            &[std::env::temp_dir().join("codex-acp-capture-test").try_into()?],
+            &[std::env::temp_dir()
+                .join("codex-acp-capture-test")
+                .try_into()?],
             NetworkSandboxPolicy::Enabled,
             /*exclude_tmpdir_env_var*/ true,
             /*exclude_slash_tmp*/ true,
@@ -5726,7 +5747,10 @@ mod tests {
 
         // "workspace-full-auto" (Never): same applied-profile shape, only
         // the approval policy differs.
-        config.permissions.approval_policy.set(AskForApproval::Never)?;
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::Never)?;
         let applied = build_profile_for_preset(preset_by_id("workspace-full-auto"), Some(&boot));
         config.permissions.set_permission_profile(applied)?;
         let mode_id = current_session_mode_id(&config).expect("mode should be recognized");
@@ -6159,7 +6183,11 @@ mod tests {
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
                 match op {
-                    Op::TurnInput { request, mode, reply } => {
+                    Op::TurnInput {
+                        request,
+                        mode,
+                        reply,
+                    } => {
                         let TurnInputRequest {
                             input,
                             thread_settings,
@@ -6168,10 +6196,12 @@ mod tests {
                             responsesapi_client_metadata,
                             trace: _,
                         } = *request;
-                        let TurnInput::UserInput { content, client_id: _ } = input else {
-                            unimplemented!(
-                                "StubCodexThread only supports TurnInput::UserInput"
-                            );
+                        let TurnInput::UserInput {
+                            content,
+                            client_id: _,
+                        } = input
+                        else {
+                            unimplemented!("StubCodexThread only supports TurnInput::UserInput");
                         };
 
                         self.ops.lock().unwrap().push(RecordedOp::TurnInput {
@@ -6569,7 +6599,11 @@ mod tests {
                             })
                             .unwrap();
                     }
-                    Op::ExecApproval { id: approval_id, turn_id, decision } => {
+                    Op::ExecApproval {
+                        id: approval_id,
+                        turn_id,
+                        decision,
+                    } => {
                         self.ops.lock().unwrap().push(RecordedOp::ExecApproval {
                             id: approval_id,
                             turn_id,
@@ -6583,32 +6617,48 @@ mod tests {
                         content,
                         meta,
                     } => {
-                        self.ops.lock().unwrap().push(RecordedOp::ResolveElicitation {
-                            server_name,
-                            request_id,
-                            decision,
-                            content,
-                            meta,
-                        });
+                        self.ops
+                            .lock()
+                            .unwrap()
+                            .push(RecordedOp::ResolveElicitation {
+                                server_name,
+                                request_id,
+                                decision,
+                                content,
+                                meta,
+                            });
                     }
-                    Op::RequestPermissionsResponse { id: request_id, response } => {
-                        self.ops.lock().unwrap().push(RecordedOp::RequestPermissionsResponse {
-                            id: request_id,
-                            response,
-                        });
+                    Op::RequestPermissionsResponse {
+                        id: request_id,
+                        response,
+                    } => {
+                        self.ops
+                            .lock()
+                            .unwrap()
+                            .push(RecordedOp::RequestPermissionsResponse {
+                                id: request_id,
+                                response,
+                            });
                     }
-                    Op::PatchApproval { id: approval_id, decision } => {
+                    Op::PatchApproval {
+                        id: approval_id,
+                        decision,
+                    } => {
                         self.ops.lock().unwrap().push(RecordedOp::PatchApproval {
                             id: approval_id,
                             decision,
                         });
                     }
                     Op::ThreadSettings { thread_settings } => {
-                        self.ops.lock().unwrap().push(RecordedOp::ThreadSettings {
-                            thread_settings,
-                        });
+                        self.ops
+                            .lock()
+                            .unwrap()
+                            .push(RecordedOp::ThreadSettings { thread_settings });
                     }
-                    Op::UserInputAnswer { id: answer_id, response } => {
+                    Op::UserInputAnswer {
+                        id: answer_id,
+                        response,
+                    } => {
                         self.ops.lock().unwrap().push(RecordedOp::UserInputAnswer {
                             id: answer_id,
                             response,
@@ -6907,12 +6957,12 @@ mod tests {
     }
 
     #[test]
-    fn test_steer_input_error_active_turn_not_steerable_maps_to_dash_32002_with_stable_substring()
-     {
+    fn test_steer_input_error_active_turn_not_steerable_maps_to_dash_32002_with_stable_substring() {
         for turn_kind in [NonSteerableTurnKind::Review, NonSteerableTurnKind::Compact] {
-            let err = not_submitted_reason_to_steer_error(
-                NotSubmittedReason::ActiveTurnNotSteerable { turn_kind },
-            );
+            let err =
+                not_submitted_reason_to_steer_error(NotSubmittedReason::ActiveTurnNotSteerable {
+                    turn_kind,
+                });
             assert_eq!(i32::from(err.code), -32002);
             assert!(
                 err.message.contains("not_steerable"),
@@ -7551,8 +7601,8 @@ mod tests {
     /// all fall back to submitting empty answers rather than leaving the
     /// codex turn hanging.
     #[tokio::test]
-    async fn test_request_user_input_falls_back_to_empty_answers_on_any_failure() -> anyhow::Result<()>
-    {
+    async fn test_request_user_input_falls_back_to_empty_answers_on_any_failure()
+    -> anyhow::Result<()> {
         for response in [
             Ok(json!({})),
             Ok(json!({"answers": "not-a-map"})),

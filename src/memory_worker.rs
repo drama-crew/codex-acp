@@ -212,8 +212,9 @@ async fn canonicalize_memory_config(mut config: Config) -> anyhow::Result<Config
         // `canonical_home.try_into()?` already used for `codex_home` just
         // below).
         if let Ok(relative_sqlite_home) = config.sqlite.home().strip_prefix(&logical_home) {
-            config.sqlite =
-                SqliteConfig::from_sqlite_home(canonical_home.join(relative_sqlite_home).try_into()?);
+            config.sqlite = SqliteConfig::from_sqlite_home(
+                canonical_home.join(relative_sqlite_home).try_into()?,
+            );
         }
         config.codex_home = canonical_home.try_into()?;
         Ok::<_, anyhow::Error>(config)
@@ -377,9 +378,8 @@ mod tests {
     -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut config = test_config(tmp.path().to_path_buf()).await?;
-        config.sqlite = SqliteConfig::from_sqlite_home(
-            tmp.path().join("separate-sqlite-home").try_into()?,
-        );
+        config.sqlite =
+            SqliteConfig::from_sqlite_home(tmp.path().join("separate-sqlite-home").try_into()?);
         let memory_root = config.codex_home.join("memories");
         tokio::fs::create_dir_all(&memory_root).await?;
         tokio::fs::write(memory_root.join("before-run.md"), "old memory").await?;

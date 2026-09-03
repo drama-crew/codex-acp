@@ -21,12 +21,12 @@ use codex_core::{
 };
 use codex_exec_server::{EnvironmentManager, ExecServerRuntimePaths};
 use codex_extension_api::{ExtensionRegistryBuilder, NoopExtensionEventSink};
+use codex_history::{InitialHistory, RolloutItem};
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::{
     CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR,
     auth::{AuthManager, CodexAuth, read_codex_api_key_from_env, read_openai_api_key_from_env},
 };
-use codex_history::{InitialHistory, RolloutItem};
 use codex_protocol::{ThreadId, mcp::ClientMcpExtensions, protocol::SessionSource};
 use codex_thread_store::{
     ListThreadsParams, SortDirection as StoreSortDirection, ThreadSortKey as StoreThreadSortKey,
