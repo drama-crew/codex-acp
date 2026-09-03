@@ -60,8 +60,25 @@ LegacyApplyPatchExecCommandWarning、LegacyModelMismatchWarning。
 因此不需要镜像。若将来它被引入截断路径，必须重新审计——它基于宿主注解而非文本，
 纯文本镜像**无法**复现，届时需要改设计而不是加前缀。
 
-## 待办（发布前强制）
+## 结果
 
-- [ ] Δ1 的三项结构性改动落地并编译通过
-- [ ] `cargo test` 中 fork 相关单测全绿
-- [ ] **真二进制 `_drama/session/fork` e2e**（DRAMA_FORK.md 要求，不可省）
+- [x] Δ1 的三项结构性改动落地，`cargo check --all-targets` 零错误
+- [x] `cargo test` 全绿（82 项，其中 fork 相关 13 项、steer 6 项）
+- [x] **镜像本身已被取消**：`classify_user_message` 改为直接调用
+      `codex_core::parse_turn_item`（正是
+      `user_message_positions_in_rollout` 用的那个谓词），漂移在构造上不可能发生。
+      本文档描述的逐条比对因此不再是每次升级的必做项。
+- [ ] **真二进制 `_drama/session/fork` e2e** —— 仍需在发布前跑一次。
+      自动化差分测试覆盖的是**分类**，不覆盖其外围的 RPC/线程接线。
+
+## 补记：差分测试当场抓出的两个真实缺陷
+
+写 `mirror_agrees_with_codex_core_classifier` 时，它立刻判定旧镜像与 codex-core
+不一致，暴露出两个**静默**缺陷（都属于"在错误的用户消息处 fork"）：
+
+1. 镜像只匹配**前缀**，而 codex-core 的 `matches_marked_text` 要求
+   **开标记与闭标记都在**。一条仅仅以 `<environment_context>` 开头的用户消息，
+   codex-core 计数、镜像不计 → `k` 偏小 → fork 早了一条。
+2. 镜像**大小写敏感**，codex-core 用 `eq_ignore_ascii_case`。
+
+这两个都是人工逐条比对标记串**看不出来**的——比的是标记本身，而不是匹配规则。

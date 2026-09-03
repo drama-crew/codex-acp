@@ -28,15 +28,24 @@ All patched `codex-*` dependencies resolve from **`drama-crew/codex` branch
 contains the maintained summary, image, and memory patches. Cargo.lock records
 the exact resolved commit for a reproducible build.
 
+The in-flight upgrade to codex `rust-v0.152.1` lives on branch
+`drama/test-0.152` in both repositories, consumed by the test environment and
+the `Causyn-beta` desktop build. It is deliberately not merged into `main`
+until the test environment has been validated. See
+`FORK_MIRROR_AUDIT-0.152.md` for that upgrade's classification audit.
+
 ## Tracking workflow
 
 1. Fetch `upstream/main` and review upstream changes against Drama `main`.
 2. Integrate the selected upstream release into Drama `main`, preserve the ACP
    extensions, run `cargo update`, and test the resulting binary.
-3. On every Codex change affecting contextual user-message classification,
-   compare codex-core's private fragment registry and truncation rules against
-   `src/fork.rs`; then run a real-binary `_drama/session/fork` e2e. A mismatch
-   can silently fork at the wrong user-message boundary.
+3. `src/fork.rs` no longer mirrors codex-core's user-message classification —
+   it calls `codex_core::parse_turn_item`, the same predicate
+   `user_message_positions_in_rollout` uses, so the two cannot drift. The
+   manual registry diff this step used to mandate is therefore obsolete; the
+   `mirror_agrees_with_codex_core_classifier` test enforces it instead. Still
+   run a real-binary `_drama/session/fork` e2e before release: the test covers
+   classification, not the RPC/thread wiring around it.
 
 ## Release
 
