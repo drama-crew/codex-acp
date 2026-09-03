@@ -8,7 +8,7 @@
 
 use codex_core::config::{Config, ConfigOverrides};
 use codex_memories_write::{PipelineReport, clear_memory_roots_contents, run_memories_pipeline};
-use codex_state::StateRuntime;
+use codex_state::{SqliteConfig, StateRuntime};
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -136,7 +136,10 @@ where
 {
     with_memory_home_lock(config, move |config| async move {
         after_lock().await?;
-        StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_home.as_path()).await?;
+        // rust-v0.152.1: `clear_memory_data_in_sqlite_home` now takes the whole
+        // `&SqliteConfig` (it derives more than just the home path from it
+        // internally) rather than a bare `&Path`.
+        StateRuntime::clear_memory_data_in_sqlite_home(&config.sqlite).await?;
         clear_memory_roots_contents(&config.codex_home).await?;
 
         Ok(())
@@ -200,8 +203,17 @@ async fn canonicalize_memory_config(mut config: Config) -> anyhow::Result<Config
         // `sqlite_home` defaults to `$CODEX_HOME`, but may also be a configured child of it.
         // Preserve an explicitly separate sqlite home while moving any home-relative state to the
         // same canonical root that owns the lock and memory roots.
-        if let Ok(relative_sqlite_home) = config.sqlite_home.strip_prefix(&logical_home) {
-            config.sqlite_home = canonical_home.join(relative_sqlite_home);
+        //
+        // rust-v0.152.1: `Config::sqlite_home` was replaced by a nested
+        // `Config::sqlite: SqliteConfig`, whose home path is read via
+        // `.home()` (`&Path`) and reconstructed via
+        // `SqliteConfig::from_sqlite_home` (which takes an `AbsolutePathBuf`,
+        // hence the `try_into()` on the joined path -- mirrors the
+        // `canonical_home.try_into()?` already used for `codex_home` just
+        // below).
+        if let Ok(relative_sqlite_home) = config.sqlite.home().strip_prefix(&logical_home) {
+            config.sqlite =
+                SqliteConfig::from_sqlite_home(canonical_home.join(relative_sqlite_home).try_into()?);
         }
         config.codex_home = canonical_home.try_into()?;
         Ok::<_, anyhow::Error>(config)
@@ -365,12 +377,14 @@ mod tests {
     -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut config = test_config(tmp.path().to_path_buf()).await?;
-        config.sqlite_home = tmp.path().join("separate-sqlite-home");
+        config.sqlite = SqliteConfig::from_sqlite_home(
+            tmp.path().join("separate-sqlite-home").try_into()?,
+        );
         let memory_root = config.codex_home.join("memories");
         tokio::fs::create_dir_all(&memory_root).await?;
         tokio::fs::write(memory_root.join("before-run.md"), "old memory").await?;
 
-        let runtime = StateRuntime::init(config.sqlite_home.clone(), "test".to_owned()).await?;
+        let runtime = StateRuntime::init(config.sqlite.clone(), "test".to_owned()).await?;
         let original_thread_id = ThreadId::new();
         let original_parent_thread_id = ThreadId::new();
         let initial_claim = runtime
@@ -440,7 +454,7 @@ mod tests {
             "clear must run after the in-flight write and empty memory roots"
         );
 
-        let runtime = StateRuntime::init(config.sqlite_home.clone(), "test".to_owned()).await?;
+        let runtime = StateRuntime::init(config.sqlite.clone(), "test".to_owned()).await?;
         let claim_after_clear = runtime
             .memories()
             .try_claim_stage1_job(original_thread_id, original_parent_thread_id, 1, 60, 1)

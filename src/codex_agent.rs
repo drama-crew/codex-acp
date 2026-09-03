@@ -15,8 +15,9 @@ use acp::{Agent, Client, ConnectTo, ConnectionTo, Error, JsonRpcMessage, JsonRpc
 use agent_client_protocol as acp;
 use codex_config::{DEFAULT_MCP_SERVER_ENVIRONMENT_ID, McpServerConfig, McpServerTransportConfig};
 use codex_core::{
-    ForkSnapshot, NewThread, RolloutRecorder, StateDbHandle, ThreadManager, config::Config,
-    find_thread_path_by_id_str, init_state_db, resolve_installation_id, thread_store_from_config,
+    ForkSnapshot, NewThread, RolloutRecorder, StartThreadOptions, StateDbHandle, ThreadManager,
+    config::Config, find_thread_path_by_id_str, init_state_db, resolve_installation_id,
+    thread_store_from_config,
 };
 use codex_exec_server::{EnvironmentManager, ExecServerRuntimePaths};
 use codex_extension_api::{ExtensionRegistryBuilder, NoopExtensionEventSink};
@@ -25,10 +26,8 @@ use codex_login::{
     CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR,
     auth::{AuthManager, CodexAuth, read_codex_api_key_from_env, read_openai_api_key_from_env},
 };
-use codex_protocol::{
-    ThreadId,
-    protocol::{InitialHistory, RolloutItem, SessionSource},
-};
+use codex_history::{InitialHistory, RolloutItem};
+use codex_protocol::{ThreadId, mcp::ClientMcpExtensions, protocol::SessionSource};
 use codex_thread_store::{
     ListThreadsParams, SortDirection as StoreSortDirection, ThreadSortKey as StoreThreadSortKey,
     ThreadStore,
@@ -76,7 +75,9 @@ const SESSION_TITLE_MAX_GRAPHEMES: usize = 120;
 
 /// Agent-bound ACP extension request: `_drama/steer`. Lets a client inject
 /// additional user input into an in-flight turn without interrupting it
-/// (bridges to codex-core's `CodexThread::steer_input` via `Thread::steer`).
+/// (bridges to codex-core's `Op::TurnInput { mode: TurnInputMode::Steer, .. }`
+/// via `Thread::steer`, rust-v0.152.1's replacement for the old dedicated
+/// `CodexThread::steer_input` method).
 /// Unlike the schema-generated request types above, this isn't part of the
 /// upstream ACP schema, so `JsonRpcMessage`/`JsonRpcRequest` are implemented
 /// by hand — mirroring the pattern the `agent-client-protocol` crate itself
@@ -139,15 +140,21 @@ pub(crate) async fn build_thread_manager_bundle(
     config: &Config,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<ThreadManagerBundle> {
-    let auth_manager = AuthManager::shared_from_config(config, false).await;
+    let auth_manager = AuthManager::shared_from_config(config, false)
+        .await
+        .map_err(std::io::Error::other)?;
 
     let state_db = init_state_db(config).await;
     let local_runtime_paths =
         ExecServerRuntimePaths::new(std::env::current_exe()?, codex_linux_sandbox_exe)?;
     let environment_manager = Arc::new(
-        EnvironmentManager::from_codex_home(&config.codex_home, Some(local_runtime_paths))
-            .await
-            .map_err(std::io::Error::other)?,
+        EnvironmentManager::from_codex_home(
+            &config.codex_home,
+            Some(local_runtime_paths),
+            config.http_client_factory(),
+        )
+        .await
+        .map_err(std::io::Error::other)?,
     );
     let thread_store = thread_store_from_config(config, state_db.clone());
     let installation_id = resolve_installation_id(&config.codex_home).await?;
@@ -160,9 +167,13 @@ pub(crate) async fn build_thread_manager_bundle(
     codex_memories_extension::install(&mut extensions_registry_builder, None);
     let extensions = Arc::new(extensions_registry_builder.build());
 
+    let models_manager = codex_core::build_models_manager(config, auth_manager.clone());
+
     let thread_manager = ThreadManager::new(
         config,
         auth_manager.clone(),
+        models_manager,
+        codex_core::CodexAppsToolsCache::default(),
         SessionSource::Cli,
         environment_manager,
         extensions,
@@ -486,6 +497,7 @@ impl CodexAgent {
                                     Some(headers.into_iter().map(|h| (h.name, h.value)).collect())
                                 },
                                 env_http_headers: None,
+                                http_headers_helper: None,
                             },
                             required: false,
                             enabled: true,
@@ -494,6 +506,7 @@ impl CodexAgent {
                             tool_timeout_sec: None,
                             disabled_tools: None,
                             enabled_tools: None,
+                            omit_tools_from: None,
                             disabled_reason: None,
                             scopes: None,
                             oauth: None,
@@ -537,6 +550,7 @@ impl CodexAgent {
                             tool_timeout_sec: None,
                             disabled_tools: None,
                             enabled_tools: None,
+                            omit_tools_from: None,
                             disabled_reason: None,
                             scopes: None,
                             oauth: None,
@@ -700,9 +714,12 @@ impl CodexAgent {
             thread_id,
             thread,
             session_configured: _,
-        } = Box::pin(self.thread_manager.start_thread(config.clone()))
-            .await
-            .map_err(|_e| Error::internal_error())?;
+        } = Box::pin(
+            self.thread_manager
+                .start_thread(StartThreadOptions::new(config.clone())),
+        )
+        .await
+        .map_err(|_e| Error::internal_error())?;
 
         let session_id = Self::session_id_from_thread_id(thread_id);
         // Record the session root for filesystem sandboxing.
@@ -822,8 +839,8 @@ impl CodexAgent {
             None,
             // codex-acp auto-declines `ElicitationRequest::OpenAiForm` (see
             // Thread::mcp_elicitation_request), so this resumed thread does not
-            // support OpenAI-form elicitation.
-            false,
+            // declare the OpenAI-form elicitation client extension.
+            ClientMcpExtensions::default(),
         ))
         .await
         .map_err(|e| Error::internal_error().data(e.to_string()))?;
@@ -880,6 +897,8 @@ impl CodexAgent {
                 model_providers: None,
                 cwd_filters: cwd.map(|cwd| vec![cwd]),
                 archived: false,
+                section: None,
+                project_id: None,
                 search_term: None,
                 relation_filter: None,
                 use_state_db_only: false,
@@ -995,7 +1014,11 @@ impl CodexAgent {
             history,
             /* thread_source */ None,
             /* parent_trace */ None,
-            /* supports_openai_form_elicitation */ false,
+            // codex-acp auto-declines `ElicitationRequest::OpenAiForm` (see
+            // Thread::mcp_elicitation_request), so this forked thread does not
+            // declare the OpenAI-form elicitation client extension.
+            ClientMcpExtensions::default(),
+            /* reserved_thread_id */ None,
         ))
         .await
         .map_err(fork_failed_error)?;

@@ -26,13 +26,15 @@ use agent_client_protocol::{
 };
 use codex_apply_patch::parse_patch;
 use codex_core::{
-    CodexThread, SteerInputError,
+    CodexThread, NotSubmittedReason, TurnInput, TurnInputRequest, TurnInputSubmission,
     config::{Config, set_project_trust_level},
     review_prompts::user_facing_hint,
 };
+use codex_history::RolloutItem;
 use codex_login::auth::AuthManager;
 use codex_models_manager::manager::{ModelsManager, RefreshStrategy};
 use codex_protocol::{
+    ResponseItemId,
     review_format::format_review_findings_block,
     approvals::{
         ElicitationRequest, ElicitationRequestEvent, GuardianAssessmentAction,
@@ -57,7 +59,8 @@ use codex_protocol::{
     protocol::{
         AgentMessageContentDeltaEvent, AgentMessageEvent,
         AgentReasoningEvent, AgentReasoningRawContentEvent, AgentReasoningSectionBreakEvent,
-        ApplyPatchApprovalRequestEvent, AskForApproval, DynamicToolCallResponseEvent,
+        ApplyPatchApprovalRequestEvent, AskForApproval, AuthRecoveryEvent,
+        DynamicToolCallResponseEvent,
         ElicitationAction, EnteredReviewModeEvent,
         ErrorEvent, Event, EventMsg, ExecApprovalRequestEvent, ExecCommandBeginEvent,
         ExecCommandEndEvent, ExecCommandOutputDeltaEvent, ExecCommandStatus, ExitedReviewModeEvent,
@@ -68,7 +71,7 @@ use codex_protocol::{
         NonSteerableTurnKind, Op,
         PatchApplyBeginEvent, PatchApplyEndEvent, PatchApplyStatus, PatchApplyUpdatedEvent,
         ReasoningContentDeltaEvent, ReasoningRawContentDeltaEvent, RequestUserInputEvent,
-        ReviewDecision, ReviewOutputEvent, ReviewRequest, ReviewTarget, RolloutItem,
+        ReviewDecision, ReviewOutputEvent, ReviewRequest, ReviewTarget,
         StreamErrorEvent, TerminalInteractionEvent, ThreadGoalStatus, ThreadGoalUpdatedEvent,
         ThreadSettingsOverrides, TokenCountEvent, TurnAbortedEvent, TurnCompleteEvent,
         TurnStartedEvent, UserMessageEvent, ViewImageToolCallEvent, WarningEvent,
@@ -79,6 +82,7 @@ use codex_protocol::{
         RequestPermissionsResponse,
     },
     request_user_input::RequestUserInputResponse,
+    turn_input::TurnInputMode,
     user_input::UserInput,
 };
 use codex_shell_command::parse_command::parse_command;
@@ -425,17 +429,17 @@ fn mode_trusts_project(mode_id: &str) -> bool {
 }
 
 /// Trait for abstracting over the `CodexThread` to make testing easier.
+///
+/// Note: there is no dedicated `steer_input` method. Steering (like ordinary
+/// prompting) is expressed by constructing an `Op::TurnInput` with the
+/// appropriate `TurnInputMode` and submitting it via `submit`, exactly like
+/// upstream's own `start_or_steer_turn`/`start_turn_if_idle`/`steer_turn`
+/// helpers do internally. See `handle_prompt` and `handle_steer` in this
+/// module.
 pub trait CodexThreadImpl: Send + Sync {
     fn submit(&self, op: Op)
     -> Pin<Box<dyn Future<Output = Result<String, CodexErr>> + Send + '_>>;
     fn next_event(&self) -> Pin<Box<dyn Future<Output = Result<Event, CodexErr>> + Send + '_>>;
-    /// Injects additional user input into the currently active turn without
-    /// creating a new turn or interrupting the one in progress. Returns the
-    /// turn id the input was steered into.
-    fn steer_input(
-        &self,
-        input: Vec<UserInput>,
-    ) -> Pin<Box<dyn Future<Output = Result<String, SteerInputError>> + Send + '_>>;
 }
 
 impl CodexThreadImpl for CodexThread {
@@ -448,13 +452,6 @@ impl CodexThreadImpl for CodexThread {
 
     fn next_event(&self) -> Pin<Box<dyn Future<Output = Result<Event, CodexErr>> + Send + '_>> {
         Box::pin(self.next_event())
-    }
-
-    fn steer_input(
-        &self,
-        input: Vec<UserInput>,
-    ) -> Pin<Box<dyn Future<Output = Result<String, SteerInputError>> + Send + '_>> {
-        Box::pin(self.steer_input(input, BTreeMap::new(), None, None, None))
     }
 }
 
@@ -561,13 +558,16 @@ enum ThreadMessage {
         turn_id: String,
         response: Result<serde_json::Value, Error>,
     },
-    /// Injects `input` into the currently active turn via
-    /// `CodexThread::steer_input`, bypassing the prompt queue entirely.
-    /// Unlike `Prompt`, this never creates a `PromptState`/submission — it
-    /// resolves as soon as `steer_input` returns (or errors).
+    /// Injects `input` into the currently active turn by submitting an
+    /// `Op::TurnInput` with `TurnInputMode::Steer { expected_turn_id }`,
+    /// bypassing the prompt queue entirely. `expected_turn_id` is derived
+    /// from the single active entry in `self.submissions` (see
+    /// `handle_steer`). Unlike `Prompt`, this never creates a
+    /// `PromptState`/submission of its own — it resolves as soon as the
+    /// engine's reply to the `Op::TurnInput` submission comes back.
     Steer {
         input: Vec<ContentBlock>,
-        response_tx: oneshot::Sender<Result<String, SteerInputError>>,
+        response_tx: oneshot::Sender<Result<String, Error>>,
     },
 }
 
@@ -651,10 +651,11 @@ impl Thread {
     }
 
     /// Injects `input` into the currently active turn without going through
-    /// the prompt queue. Resolves as soon as `CodexThread::steer_input`
-    /// returns (no `PromptState` is created, and this layer never echoes
-    /// the input back to the client — hosts are responsible for that).
-    /// Returns the turn id the input was steered into.
+    /// the prompt queue. Resolves as soon as the engine's reply to the
+    /// steering `Op::TurnInput` submission comes back (no `PromptState` is
+    /// created, and this layer never echoes the input back to the client —
+    /// hosts are responsible for that). Returns the turn id the input was
+    /// steered into.
     pub async fn steer(&self, input: Vec<ContentBlock>) -> Result<String, Error> {
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -664,7 +665,6 @@ impl Thread {
         response_rx
             .await
             .map_err(|e| Error::internal_error().data(e.to_string()))?
-            .map_err(steer_input_error_to_acp_error)
     }
 
     pub async fn set_mode(&self, mode: SessionModeId) -> Result<(), Error> {
@@ -1394,6 +1394,11 @@ impl PromptState {
             call_id,
             turn_id,
             questions,
+            // rust-v0.152.1: whether the model intends to block on this
+            // request. Core only forwards it; enforcement is the client's
+            // job. We pass it through the same way as `auto_resolution_ms`
+            // (unknown fields are ignored by current UIs).
+            is_blocking,
             // rust-v0.144.3: model-requested auto-resolution timeout. Core only
             // clamps and forwards it; enforcement is the client's job. Our
             // _drama/ask UIs don't auto-resolve yet, so we pass it through for
@@ -1408,6 +1413,7 @@ impl PromptState {
             "call_id": &call_id,
             "turn_id": &turn_id,
             "questions": questions,
+            "is_blocking": is_blocking,
             "auto_resolution_ms": auto_resolution_ms,
         });
 
@@ -1582,7 +1588,7 @@ impl PromptState {
                 self.seen_reasoning_deltas = true;
                 client.send_agent_thought("\n\n");
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message , phase: _, memory_citation: _ }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message , phase: _, memory_citation: _, delivery: _ }) => {
                 info!("Agent message (non-delta) received: {message:?}");
                 // We didn't receive this message via streaming
                 if !std::mem::take(&mut self.seen_message_deltas) {
@@ -1600,6 +1606,18 @@ impl PromptState {
                 info!("Thread goal updated: {:?}", event.goal.objective);
                 client.send_agent_text(format_thread_goal_update(&event));
             }
+            // rust-v0.152.1: provider-owned auth recovery lifecycle. Both
+            // variants carry the same shape (`provider` + a ready-to-display
+            // `message`), so surface it the same way we already surface
+            // `Warning`/`GuardianWarning` text — this is explicitly
+            // documented as "User-facing description of the authentication
+            // recovery stage", so silently dropping it would be a real
+            // degradation rather than an inert new event kind.
+            EventMsg::AuthRecoveryStarted(AuthRecoveryEvent { provider, message })
+            | EventMsg::AuthRecoveryCompleted(AuthRecoveryEvent { provider, message }) => {
+                info!("Auth recovery: provider={provider}, message={message}");
+                client.send_agent_text(message);
+            }
             EventMsg::PlanUpdate(UpdatePlanArgs { explanation, plan }) => {
                 // Send this to the client via session/update notification
                 info!("Agent plan updated. Explanation: {:?}", explanation);
@@ -1614,6 +1632,11 @@ impl PromptState {
                 call_id,
                 query,
                 action,
+                // rust-v0.152.1: structured out-of-band search results. We
+                // still render web search progress purely from `action`/the
+                // subsequent `AgentMessage` (see comment below), so this new
+                // field isn't consumed yet.
+                results: _,
             }) => {
                 info!("Web search query received: call_id={call_id}, query={query}");
                 // Send update that the search is in progress with the query
@@ -1742,11 +1765,12 @@ impl PromptState {
                 thread_id,
                 turn_id,
                 item,
+                started_at_ms: _,
                 completed_at_ms: _,
             }) => {
                 info!("Item completed: thread_id={}, turn_id={}, item={:?}", thread_id, turn_id, item);
             }
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message, turn_id, completed_at: _, duration_ms: _, time_to_first_token_ms: _, }) => {
+            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message, turn_id, completed_at: _, duration_ms: _, time_to_first_token_ms: _, error: _, started_at: _, }) => {
                 info!(
                     "Task {turn_id} completed successfully after {} events. Last agent message: {last_agent_message:?}",
                     self.event_count
@@ -1768,6 +1792,7 @@ impl PromptState {
             EventMsg::Error(ErrorEvent {
                 message,
                 codex_error_info,
+                misalignment: _,
             }) => {
                 error!("Unhandled error during turn: {message} {codex_error_info:?}");
                 self.detach_pending_interactions();
@@ -1779,7 +1804,7 @@ impl PromptState {
                         .ok();
                 }
             }
-            EventMsg::TurnAborted(TurnAbortedEvent { reason, turn_id, completed_at: _, duration_ms: _ }) => {
+            EventMsg::TurnAborted(TurnAbortedEvent { reason, turn_id, completed_at: _, duration_ms: _, started_at: _ }) => {
                 info!("Turn {turn_id:?} aborted: {reason:?}");
                 self.detach_pending_interactions();
                 if let Some(response_tx) = self.response_tx.take() {
@@ -1911,7 +1936,19 @@ impl PromptState {
             // rust-v0.144.3: new event kinds codex-acp does not yet surface.
             | EventMsg::TurnModerationMetadata(..)
             | EventMsg::SafetyBuffering(..)
-            | EventMsg::SubAgentActivity(..) => {}
+            | EventMsg::SubAgentActivity(..)
+            // rust-v0.152.1: new event kinds codex-acp does not yet surface.
+            // `EnvironmentConnected`/`EnvironmentDisconnected` only carry an
+            // opaque `environment_id`, with no UI-facing text; and
+            // `ThreadQueueChanged` is a pure "something changed, go re-query"
+            // signal (just `thread_id`) with no payload to render.
+            | EventMsg::EnvironmentConnected(..)
+            | EventMsg::EnvironmentDisconnected(..)
+            | EventMsg::ThreadQueueChanged(..)
+            // Pairs with the already-ignored `RawResponseItem` above (both
+            // are "old events" from an earlier raw-response streaming design
+            // that codex-acp never surfaced).
+            | EventMsg::RawResponseCompleted(..) => {}
             e @ (EventMsg::RealtimeConversationListVoicesResponse(..)
             | EventMsg::DeprecationNotice(..)) => {
                 warn!("Unexpected event: {:?}", e);
@@ -1958,6 +1995,11 @@ impl PromptState {
         let request_kind = match &request {
             ElicitationRequest::Form { .. } => "form",
             ElicitationRequest::OpenAiForm { .. } => "openai/form",
+            // rust-v0.152.1: renamed-tag sibling of `OpenAiForm` (wire tag
+            // `openaiForm` vs `openai/form`). Same shape, so it's still
+            // unsupported here and falls through to the same auto-decline
+            // path as the other unsupported kinds below.
+            ElicitationRequest::OpenAiElicitationForm { .. } => "openaiForm",
             ElicitationRequest::Url { .. } => "url",
         };
 
@@ -2209,6 +2251,15 @@ impl PromptState {
                                     ResourceLink::new(image_url.clone(), image_url),
                                 )))
                             }
+                            // rust-v0.152.1: new content item kind for dynamic
+                            // tool call output. Surfaced the same way as
+                            // `InputImage` (a resource link keyed by URL) since
+                            // ACP's `Content` type has no dedicated audio kind.
+                            DynamicToolCallOutputContentItem::InputAudio { audio_url } => {
+                                ToolCallContent::Content(Content::new(ContentBlock::ResourceLink(
+                                    ResourceLink::new(audio_url.clone(), audio_url),
+                                )))
+                            }
                         })
                         .chain(error.map(|e| ToolCallContent::Content(Content::new(e))))
                         .collect::<Vec<_>>(),
@@ -2283,13 +2334,19 @@ impl PromptState {
 
         // Create a new tool call for the command execution
         let tool_call_id = ToolCallId::new(call_id.clone());
+        // rust-v0.152.1: `ExecApprovalRequestEvent.cwd` is now a
+        // `LegacyAppPathString` (an opaque UTF-8 API-boundary string) rather
+        // than a `PathBuf`. `parse_command_tool_call` only needs it for
+        // display/relativization, so render it back to a `Path` via its raw
+        // string form.
+        let cwd_path = std::path::PathBuf::from(cwd.as_str());
         let ParseCommandToolCall {
             title,
             terminal_output,
             file_extension,
             locations,
             kind,
-        } = parse_command_tool_call(parsed_cmd, &cwd);
+        } = parse_command_tool_call(parsed_cmd, &cwd_path);
         self.active_commands.insert(
             call_id.clone(),
             ActiveCommand {
@@ -2386,6 +2443,8 @@ impl PromptState {
             turn_id: _,
             source: _,
             interaction_input: _,
+            plugin_id: _,
+            script_path: _,
             call_id,
             command: _,
             started_at_ms: _,
@@ -2490,6 +2549,8 @@ impl PromptState {
             parsed_cmd: _,
             source: _,
             interaction_input: _,
+            plugin_id: _,
+            script_path: _,
             call_id,
             exit_code,
             stdout: _,
@@ -2610,6 +2671,8 @@ impl PromptState {
             status,
             revised_prompt,
             result,
+            transparent_background: _,
+            failure: _,
             saved_path,
         } = event;
         let tool_status = image_generation_tool_status(&status);
@@ -2881,6 +2944,23 @@ fn build_exec_permission_options(
                     },
                 }
             }
+            // rust-v0.152.1: new variant for persisting an MCP tool-call
+            // policy amendment. Core only routes it through the *MCP*
+            // elicitation approval path (`build_supported_mcp_elicitation_permission_request`
+            // below), never through `available_decisions` on an
+            // `ExecApprovalRequestEvent` — but the match must stay
+            // exhaustive over the whole `ReviewDecision` enum, so this arm
+            // exists defensively with a generic label in case that ever
+            // changes.
+            ReviewDecision::ApprovedMcpPolicyAmendment => ExecPermissionOption {
+                option_id: "approved-mcp-policy-amendment",
+                permission_option: PermissionOption::new(
+                    "approved-mcp-policy-amendment",
+                    "Yes, and remember this MCP tool policy",
+                    PermissionOptionKind::AllowAlways,
+                ),
+                decision: ReviewDecision::ApprovedMcpPolicyAmendment,
+            },
             ReviewDecision::ApprovedForSession => ExecPermissionOption {
                 option_id: "approved-for-session",
                 permission_option: PermissionOption::new(
@@ -2919,14 +2999,19 @@ fn build_exec_permission_options(
                     },
                 }
             }
-            ReviewDecision::Denied => ExecPermissionOption {
+            // rust-v0.152.1: `Denied` gained a `rejection: String` field
+            // carrying a human-readable reason that's relayed back to the
+            // model. This generic decline option doesn't have any
+            // user-authored text to put there, so it uses the same
+            // "denied" placeholder as `ReviewDecision::default()`/`denied()`.
+            ReviewDecision::Denied { .. } => ExecPermissionOption {
                 option_id: "denied",
                 permission_option: PermissionOption::new(
                     "denied",
                     "No, continue without running it",
                     PermissionOptionKind::RejectOnce,
                 ),
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::denied("denied"),
             },
             ReviewDecision::Abort => ExecPermissionOption {
                 option_id: "abort",
@@ -3658,21 +3743,27 @@ impl<A: Auth> ThreadActor<A> {
         let (response_tx, response_rx) = oneshot::channel();
 
         let items = build_prompt_items(request.prompt);
-        let op;
+
+        /// What kind of `Op` this prompt turns into. `UserInput` is handled
+        /// specially: unlike upstream's now-removed `Op::UserInput`, the
+        /// engine no longer accepts free-standing user input — it must be
+        /// wrapped in an `Op::TurnInput` (with our own reply channel) so we
+        /// can learn whether a new turn actually started. `Compact`/`Review`
+        /// keep using the plain, unchanged `submit` flow.
+        enum PromptOp {
+            Plain(Op),
+            UserInput(Vec<UserInput>),
+        }
+
+        let prompt_op;
         if let Some((name, rest)) = extract_slash_command(&items) {
             match name {
-                "compact" => op = Op::Compact,
+                "compact" => prompt_op = PromptOp::Plain(Op::Compact),
                 "init" => {
-                    op = Op::UserInput {
-                        items: vec![UserInput::Text {
-                            text: INIT_COMMAND_PROMPT.into(),
-                            text_elements: vec![],
-                        }],
-                        final_output_json_schema: None,
-                        responsesapi_client_metadata: None,
-                        additional_context: Default::default(),
-                        thread_settings: Default::default(),
-                    }
+                    prompt_op = PromptOp::UserInput(vec![UserInput::Text {
+                        text: INIT_COMMAND_PROMPT.into(),
+                        text_elements: vec![],
+                    }]);
                 }
                 "review" => {
                     let instructions = rest.trim();
@@ -3684,65 +3775,94 @@ impl<A: Auth> ThreadActor<A> {
                         }
                     };
 
-                    op = Op::Review {
+                    prompt_op = PromptOp::Plain(Op::Review {
                         review_request: ReviewRequest {
                             user_facing_hint: Some(user_facing_hint(&target)),
                             target,
                         },
-                    }
+                    })
                 }
                 "review-branch" if !rest.is_empty() => {
                     let target = ReviewTarget::BaseBranch {
                         branch: rest.trim().to_owned(),
                     };
-                    op = Op::Review {
+                    prompt_op = PromptOp::Plain(Op::Review {
                         review_request: ReviewRequest {
                             user_facing_hint: Some(user_facing_hint(&target)),
                             target,
                         },
-                    }
+                    })
                 }
                 "review-commit" if !rest.is_empty() => {
                     let target = ReviewTarget::Commit {
                         sha: rest.trim().to_owned(),
                         title: None,
                     };
-                    op = Op::Review {
+                    prompt_op = PromptOp::Plain(Op::Review {
                         review_request: ReviewRequest {
                             user_facing_hint: Some(user_facing_hint(&target)),
                             target,
                         },
-                    }
+                    })
                 }
                 "logout" => {
                     self.auth.logout().await?;
                     return Err(Error::auth_required());
                 }
                 _ => {
-                    op = Op::UserInput {
-                        items,
-                        final_output_json_schema: None,
-                        responsesapi_client_metadata: None,
-                        additional_context: Default::default(),
-                        thread_settings: Default::default(),
-                    }
+                    prompt_op = PromptOp::UserInput(items);
                 }
             }
         } else {
-            op = Op::UserInput {
-                items,
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
-            }
+            prompt_op = PromptOp::UserInput(items);
         }
 
-        let submission_id = self
-            .thread
-            .submit(op.clone())
-            .await
-            .map_err(|e| Error::internal_error().data(e.to_string()))?;
+        let submission_id = match prompt_op {
+            PromptOp::Plain(op) => self
+                .thread
+                .submit(op)
+                .await
+                .map_err(|e| Error::internal_error().data(e.to_string()))?,
+            PromptOp::UserInput(items) => {
+                // Unlike `Op::Compact`/`Op::Review`, plain user input is no
+                // longer submitted as its own top-level `Op` variant. We
+                // wrap it in `Op::TurnInput` with `TurnInputMode::StartIfIdle`
+                // (rather than `StartOrSteer`) so a `session/prompt` call
+                // that races with an already-in-flight turn on this thread
+                // fails explicitly (`NotSubmitted { reason: NotIdle }`)
+                // instead of being silently folded into the other turn as a
+                // steer — `PromptState`/`self.submissions` is a
+                // single-waiter model per submission id, so silently
+                // steering here would have no `PromptState` to resolve
+                // against. Judgment call: this introduces a new explicit
+                // "busy" failure mode for genuinely-concurrent prompts on
+                // one session that did not exist before.
+                let (reply_tx, reply_rx) = oneshot::channel();
+                let op = Op::TurnInput {
+                    request: Box::new(TurnInputRequest::user_input(items)),
+                    mode: TurnInputMode::StartIfIdle,
+                    reply: reply_tx,
+                };
+                let id = self
+                    .thread
+                    .submit(op)
+                    .await
+                    .map_err(|e| Error::internal_error().data(e.to_string()))?;
+                let submission = reply_rx
+                    .await
+                    .map_err(|e| Error::internal_error().data(e.to_string()))?
+                    .map_err(|e| Error::internal_error().data(e.to_string()))?;
+                match submission {
+                    TurnInputSubmission::Started { .. } => id,
+                    TurnInputSubmission::NotSubmitted { reason } => {
+                        return Err(not_submitted_reason_to_prompt_error(reason));
+                    }
+                    TurnInputSubmission::Steered { .. } => {
+                        unreachable!("TurnInputMode::StartIfIdle never yields Steered")
+                    }
+                }
+            }
+        };
 
         info!("Submitted prompt with submission_id: {submission_id}");
         info!("Starting to wait for conversation events for submission_id: {submission_id}");
@@ -3759,14 +3879,56 @@ impl<A: Auth> ThreadActor<A> {
         Ok(response_rx)
     }
 
-    /// Steers `input` into the currently active turn. Does not create a
-    /// `PromptState`/submission and does not consult `self.submissions` —
-    /// `steer_input` resolves synchronously (relative to the actor) with
-    /// either the steered-into turn id or an error describing why steering
-    /// wasn't possible (no active turn / turn not steerable).
-    async fn handle_steer(&mut self, input: Vec<ContentBlock>) -> Result<String, SteerInputError> {
+    /// Steers `input` into the currently active turn by submitting an
+    /// `Op::TurnInput` with `TurnInputMode::Steer { expected_turn_id }`.
+    /// `expected_turn_id` is derived from `self.submissions` (requiring
+    /// exactly one active entry) rather than a separately-tracked field:
+    /// `self.submissions` already generically tracks any active submission
+    /// regardless of which `Op` variant started it (plain user input,
+    /// review, or compact), so this stays correct for turns that aren't
+    /// steerable (Review/Compact) instead of blindly reporting
+    /// "no active turn" for them — a wrong `expected_turn_id` just yields
+    /// `NotSubmittedReason::ExpectedTurnMismatch` from the engine, mapped
+    /// to the same wire contract as before.
+    async fn handle_steer(&mut self, input: Vec<ContentBlock>) -> Result<String, Error> {
         let items = build_prompt_items(input);
-        self.thread.steer_input(items).await
+
+        let expected_turn_id = {
+            let mut ids = self.submissions.keys();
+            match (ids.next(), ids.next()) {
+                (Some(id), None) => id.clone(),
+                _ => {
+                    return Err(Error::new(
+                        -32002,
+                        "no_active_turn: no active turn to steer input into",
+                    ));
+                }
+            }
+        };
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let op = Op::TurnInput {
+            request: Box::new(TurnInputRequest::user_input(items)),
+            mode: TurnInputMode::Steer { expected_turn_id },
+            reply: reply_tx,
+        };
+        self.thread
+            .submit(op)
+            .await
+            .map_err(|e| Error::internal_error().data(e.to_string()))?;
+        let submission = reply_rx
+            .await
+            .map_err(|e| Error::internal_error().data(e.to_string()))?
+            .map_err(|e| Error::internal_error().data(e.to_string()))?;
+        match submission {
+            TurnInputSubmission::Steered { turn_id } => Ok(turn_id),
+            TurnInputSubmission::NotSubmitted { reason } => {
+                Err(not_submitted_reason_to_steer_error(reason))
+            }
+            TurnInputSubmission::Started { .. } => {
+                unreachable!("TurnInputMode::Steer never yields Started")
+            }
+        }
     }
 
     async fn handle_set_mode(&mut self, mode: SessionModeId) -> Result<(), Error> {
@@ -3858,8 +4020,8 @@ impl<A: Auth> ThreadActor<A> {
                 RolloutItem::EventMsg(event_msg) => {
                     self.replay_event_msg(&event_msg);
                 }
-                RolloutItem::ResponseItem(response_item) => {
-                    self.replay_response_item(&response_item);
+                RolloutItem::ResponseItem(envelope) => {
+                    self.replay_response_item(&envelope.item);
                 }
                 // Skip SessionMeta, TurnContext, Compacted
                 _ => {}
@@ -3879,6 +4041,7 @@ impl<A: Auth> ThreadActor<A> {
                 message,
                 phase: _,
                 memory_citation: _,
+                delivery: _,
             }) => {
                 self.client.send_agent_text(message.clone());
             }
@@ -4066,8 +4229,15 @@ impl<A: Auth> ThreadActor<A> {
             ResponseItem::FunctionCallOutput {
                 call_id, output, ..
             } => {
+                // rust-v0.152.1: `call_id` is now `Option<String>` (was a
+                // required `String`). Fall back to a generated id in the
+                // rare case it's absent, same pattern used below for
+                // `WebSearchCall`/`ImageGenerationCall`'s optional ids.
+                let call_id = call_id
+                    .clone()
+                    .unwrap_or_else(|| generate_fallback_id("function_call_output"));
                 self.client
-                    .send_tool_call_completed(call_id.clone(), serde_json::to_value(output).ok());
+                    .send_tool_call_completed(call_id, serde_json::to_value(output).ok());
             }
             ResponseItem::LocalShellCall {
                 call_id: Some(call_id),
@@ -4167,7 +4337,12 @@ impl<A: Auth> ThreadActor<A> {
             } => {
                 self.client.send_tool_call(
                     ToolCall::new(
-                        id.clone().unwrap_or_else(|| generate_fallback_id("image_generation")),
+                        // rust-v0.152.1: `id` is now `Option<ResponseItemId>`
+                        // (was `Option<String>`); `ToolCall::new` needs a
+                        // plain string id.
+                        id.clone()
+                            .map(String::from)
+                            .unwrap_or_else(|| generate_fallback_id("image_generation")),
                         "Image generation",
                     )
                         .kind(ToolKind::Other)
@@ -4198,18 +4373,20 @@ impl<A: Auth> ThreadActor<A> {
     }
 }
 
-/// Maps codex-core's `SteerInputError` to the ACP error surfaced over
-/// `_drama/steer`. Per the wire contract, "no active turn to steer into"
-/// and "turn not steerable" (Review/Compact) are both reported as
-/// `code=-32002` with a `message` containing a stable, client-matchable
-/// substring (`no_active_turn` / `not_steerable`) so callers can downgrade
+/// Maps codex-core's `NotSubmittedReason` (returned for an
+/// `Op::TurnInput` submitted with `TurnInputMode::Steer`) to the ACP error
+/// surfaced over `_drama/steer`. Per the wire contract, "no active turn to
+/// steer into" and "turn not steerable" (Review/Compact, or the newer
+/// non-steerable reasons below) are both reported as `code=-32002` with a
+/// `message` containing a stable, client-matchable substring
+/// (`no_active_turn` / `not_steerable`) so callers can downgrade
 /// gracefully instead of pattern-matching human-readable text.
-fn steer_input_error_to_acp_error(err: SteerInputError) -> Error {
-    match err {
-        SteerInputError::NoActiveTurn(_) => {
+fn not_submitted_reason_to_steer_error(reason: NotSubmittedReason) -> Error {
+    match reason {
+        NotSubmittedReason::NoActiveTurn => {
             Error::new(-32002, "no_active_turn: no active turn to steer input into")
         }
-        SteerInputError::ActiveTurnNotSteerable { turn_kind } => {
+        NotSubmittedReason::ActiveTurnNotSteerable { turn_kind } => {
             let turn_kind_label = match turn_kind {
                 NonSteerableTurnKind::Review => "review",
                 NonSteerableTurnKind::Compact => "compact",
@@ -4219,13 +4396,40 @@ fn steer_input_error_to_acp_error(err: SteerInputError) -> Error {
                 format!("not_steerable: cannot steer a {turn_kind_label} turn"),
             )
         }
-        SteerInputError::ExpectedTurnMismatch { expected, actual } => Error::new(
+        NotSubmittedReason::ExpectedTurnMismatch { expected, actual } => Error::new(
             -32002,
             format!("no_active_turn: expected active turn `{expected}` but found `{actual}`"),
         ),
-        SteerInputError::EmptyInput => {
+        NotSubmittedReason::EmptyInput => {
             Error::invalid_params().data("steer input must not be empty")
         }
+        // Newer variants introduced alongside the unified turn-input model.
+        // None of these are produced by `TurnInputMode::Steer` in practice
+        // (`NotIdle`/`PendingTriggerTurn`/`PlanMode` are `start_turn_if_idle`
+        // outcomes; `ActiveTurnOutputSchemaMismatch` applies only when a
+        // final output schema is requested, which `_drama/steer` never
+        // does) but are handled defensively rather than left to panic.
+        other @ (NotSubmittedReason::NotIdle
+        | NotSubmittedReason::PendingTriggerTurn
+        | NotSubmittedReason::PlanMode
+        | NotSubmittedReason::ActiveTurnOutputSchemaMismatch) => {
+            Error::new(-32002, format!("not_steerable: {other:?}"))
+        }
+    }
+}
+
+/// Maps codex-core's `NotSubmittedReason` (returned for an `Op::TurnInput`
+/// submitted with `TurnInputMode::StartIfIdle`) to the ACP error surfaced
+/// over `session/prompt`.
+fn not_submitted_reason_to_prompt_error(reason: NotSubmittedReason) -> Error {
+    match reason {
+        NotSubmittedReason::NotIdle => {
+            Error::internal_error().data("a turn is already in progress on this thread")
+        }
+        NotSubmittedReason::EmptyInput => {
+            Error::invalid_params().data("prompt must not be empty")
+        }
+        other => Error::internal_error().data(format!("turn input was not submitted: {other:?}")),
     }
 }
 
@@ -4480,6 +4684,14 @@ fn guardian_action_summary(action: &GuardianAssessmentAction) -> Option<String> 
                 .clone()
                 .unwrap_or_else(|| "request additional permissions".to_string()),
         ),
+        // rust-v0.152.1: new guardian-reviewed action kind — a child
+        // approval for input sent to an already-running command/terminal.
+        // Summarize like the other actions (source + short description)
+        // without echoing the raw stdin payload, which may be large or
+        // binary.
+        GuardianAssessmentAction::WriteStdin { process_id, .. } => {
+            Some(format!("write stdin to process {process_id}"))
+        }
     }
 }
 
@@ -4501,7 +4713,11 @@ fn format_file_system_entries<'a>(
 
 fn format_file_system_entry(entry: &FileSystemSandboxEntry) -> String {
     match &entry.path {
-        FileSystemPath::Path { path } => path.display().to_string(),
+        // rust-v0.152.1: `FileSystemPath::Path.path` is now a `PathUri`
+        // rather than a `PathBuf`. Render it the same way we already render
+        // other host paths for display (native path string, not the raw
+        // `file://` URI form that `Display`/`ToString` would give).
+        FileSystemPath::Path { path } => path.inferred_native_path_string(),
         FileSystemPath::GlobPattern { pattern } => format!("glob `{pattern}`"),
         FileSystemPath::Special { value } => format_file_system_special(value),
     }
@@ -4522,18 +4738,25 @@ fn format_file_system_special(value: &FileSystemSpecialPath) -> String {
     }
 }
 
-fn format_file_system_subpath(base: &str, subpath: Option<&Path>) -> String {
+fn format_file_system_subpath(base: &str, subpath: Option<&str>) -> String {
     match subpath {
-        Some(subpath) => format!("{base}/{}", subpath.display()),
+        Some(subpath) => format!("{base}/{subpath}"),
         None => base.to_string(),
     }
 }
 
 /// Extract title and call_id from a WebSearchAction (used for replay)
 fn web_search_action_to_title_and_id(
-    id: &Option<String>,
+    id: &Option<ResponseItemId>,
     action: &codex_protocol::models::WebSearchAction,
 ) -> (String, String) {
+    // rust-v0.152.1: `ResponseItem::WebSearchCall.id` changed from
+    // `Option<String>` to `Option<ResponseItemId>`. This helper only ever
+    // used the id as an opaque display/call-id string, so convert once up
+    // front and leave the rest of the function (and its three
+    // `id.clone().unwrap_or_else(...)` call-id fallbacks below) unchanged.
+    let id: Option<String> = id.clone().map(String::from);
+    let id = &id;
     match action {
         codex_protocol::models::WebSearchAction::Search { query, queries } => {
             let title = queries
@@ -4814,7 +5037,7 @@ mod tests {
             }) if text == "Compact task completed"
         ));
         let ops = thread.ops.lock().unwrap();
-        assert_eq!(ops.as_slice(), &[Op::Compact]);
+        assert_eq!(ops.as_slice(), &[RecordedOp::Compact]);
 
         Ok(())
     }
@@ -5065,12 +5288,13 @@ mod tests {
     /// `derive_permission_profile` produces for each
     /// `[sandbox_workspace_write].writable_roots` element.
     fn write_entry(path: PathBuf) -> FileSystemSandboxEntry {
-        FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: path.try_into().expect("absolute path"),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: codex_utils_path_uri::PathUri::from_host_native_path(&path)
+                    .expect("absolute path"),
             },
-            access: FileSystemAccessMode::Write,
-        }
+            FileSystemAccessMode::Write,
+        )
     }
 
     /// Disk-independent boot-shaped workspace-write profile: pristine
@@ -5140,7 +5364,7 @@ mod tests {
     ) -> bool {
         profile.file_system_sandbox_policy().entries.iter().any(|entry| {
             entry.access == access
-                && matches!(&entry.path, FileSystemPath::Path { path } if path.as_path() == expected)
+                && matches!(&entry.path, FileSystemPath::Path { path } if path.to_path_buf() == expected.to_path_buf())
         })
     }
 
@@ -5189,10 +5413,10 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(200), response_rx).await???;
 
         let ops = conversation.ops.lock().unwrap();
-        let Some(Op::ThreadSettings { thread_settings }) = ops
+        let Some(RecordedOp::ThreadSettings { thread_settings }) = ops
             .iter()
             .rev()
-            .find(|op| matches!(op, Op::ThreadSettings { .. }))
+            .find(|op| matches!(op, RecordedOp::ThreadSettings { .. }))
         else {
             panic!("expected a submitted Op::ThreadSettings, got: {ops:?}");
         };
@@ -5549,11 +5773,12 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert_eq!(
             ops.as_slice(),
-            &[Op::UserInput {
+            &[RecordedOp::TurnInput {
                 items: vec![UserInput::Text {
                     text: INIT_COMMAND_PROMPT.to_string(),
                     text_elements: vec![]
                 }],
+                mode: TurnInputMode::StartIfIdle,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
                 additional_context: Default::default(),
@@ -5595,7 +5820,7 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert_eq!(
             ops.as_slice(),
-            &[Op::Review {
+            &[RecordedOp::Review {
                 review_request: ReviewRequest {
                     user_facing_hint: Some(user_facing_hint(&ReviewTarget::UncommittedChanges)),
                     target: ReviewTarget::UncommittedChanges,
@@ -5641,7 +5866,7 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert_eq!(
             ops.as_slice(),
-            &[Op::Review {
+            &[RecordedOp::Review {
                 review_request: ReviewRequest {
                     user_facing_hint: Some(user_facing_hint(&ReviewTarget::Custom {
                         instructions: instructions.to_owned()
@@ -5687,7 +5912,7 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert_eq!(
             ops.as_slice(),
-            &[Op::Review {
+            &[RecordedOp::Review {
                 review_request: ReviewRequest {
                     user_facing_hint: Some(user_facing_hint(&ReviewTarget::Commit {
                         sha: "123456".to_owned(),
@@ -5735,7 +5960,7 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert_eq!(
             ops.as_slice(),
-            &[Op::Review {
+            &[RecordedOp::Review {
                 review_request: ReviewRequest {
                     user_facing_hint: Some(user_facing_hint(&ReviewTarget::BaseBranch {
                         branch: "feature".to_owned()
@@ -5846,14 +6071,68 @@ mod tests {
         }
     }
 
+    /// A structural, side-effect-free recording of an `Op` submitted to
+    /// `StubCodexThread::submit`. `codex_protocol::protocol::Op` is no
+    /// longer `Clone`/`PartialEq` (rust-v0.152.1), so tests can't assert
+    /// against the raw `Op` the way they used to; this mirrors just the
+    /// fields tests actually assert on, in an owned, comparable shape.
+    ///
+    /// `TurnInput`'s field list (`items`, `mode`, `thread_settings`,
+    /// `additional_context`, `responsesapi_client_metadata`,
+    /// `final_output_json_schema`) is dictated by `test_init`'s exact-value
+    /// `assert_eq!` against a fully-populated literal — every field here is
+    /// load-bearing, not speculative.
+    #[derive(Debug, Clone, PartialEq)]
+    enum RecordedOp {
+        TurnInput {
+            items: Vec<UserInput>,
+            mode: TurnInputMode,
+            thread_settings: ThreadSettingsOverrides,
+            additional_context: BTreeMap<String, codex_protocol::protocol::AdditionalContextEntry>,
+            responsesapi_client_metadata: Option<HashMap<String, String>>,
+            final_output_json_schema: Option<serde_json::Value>,
+        },
+        Compact,
+        Review {
+            review_request: ReviewRequest,
+        },
+        ExecApproval {
+            id: String,
+            turn_id: Option<String>,
+            decision: ReviewDecision,
+        },
+        PatchApproval {
+            id: String,
+            decision: ReviewDecision,
+        },
+        ResolveElicitation {
+            server_name: String,
+            request_id: codex_protocol::mcp::RequestId,
+            decision: ElicitationAction,
+            content: Option<serde_json::Value>,
+            meta: Option<serde_json::Value>,
+        },
+        RequestPermissionsResponse {
+            id: String,
+            response: RequestPermissionsResponse,
+        },
+        ThreadSettings {
+            thread_settings: ThreadSettingsOverrides,
+        },
+        UserInputAnswer {
+            id: String,
+            response: RequestUserInputResponse,
+        },
+        Interrupt,
+        Shutdown,
+    }
+
     struct StubCodexThread {
         current_id: AtomicUsize,
         active_prompt_id: std::sync::Mutex<Option<String>>,
-        ops: std::sync::Mutex<Vec<Op>>,
+        ops: std::sync::Mutex<Vec<RecordedOp>>,
         op_tx: mpsc::UnboundedSender<Event>,
         op_rx: Mutex<mpsc::UnboundedReceiver<Event>>,
-        steer_calls: std::sync::Mutex<Vec<Vec<UserInput>>>,
-        steer_result: std::sync::Mutex<Option<Result<String, SteerInputError>>>,
     }
 
     impl StubCodexThread {
@@ -5865,17 +6144,7 @@ mod tests {
                 ops: std::sync::Mutex::default(),
                 op_tx,
                 op_rx: Mutex::new(op_rx),
-                steer_calls: std::sync::Mutex::default(),
-                steer_result: std::sync::Mutex::new(Some(Ok("turn-1".to_string()))),
             }
-        }
-
-        /// Configures the result the *next* `steer_input` call will resolve
-        /// with. `SteerInputError` isn't `Clone`, so this is single-shot
-        /// (consumed by the next call, matching the tests' one-call-per-test
-        /// shape).
-        fn set_steer_result(&self, result: Result<String, SteerInputError>) {
-            *self.steer_result.lock().unwrap() = Some(result);
         }
     }
 
@@ -5889,231 +6158,331 @@ mod tests {
                     .current_id
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-                self.ops.lock().unwrap().push(op.clone());
-
                 match op {
-                    Op::UserInput { items, .. } => {
-                        *self.active_prompt_id.lock().unwrap() = Some(id.to_string());
-                        let prompt = items
-                            .into_iter()
-                            .map(|i| match i {
-                                UserInput::Text { text, .. } => text,
-                                _ => unimplemented!(),
-                            })
-                            .join("\n");
+                    Op::TurnInput { request, mode, reply } => {
+                        let TurnInputRequest {
+                            input,
+                            thread_settings,
+                            start,
+                            additional_context,
+                            responsesapi_client_metadata,
+                            trace: _,
+                        } = *request;
+                        let TurnInput::UserInput { content, client_id: _ } = input else {
+                            unimplemented!(
+                                "StubCodexThread only supports TurnInput::UserInput"
+                            );
+                        };
 
-                        if prompt == "parallel-exec" {
-                            // Emit interleaved exec events: Begin A, Begin B, End A, End B
-                            let turn_id = id.to_string();
-                            let cwd = std::env::current_dir().unwrap();
-                            let send = |msg| {
-                                self.op_tx
-                                    .send(Event {
-                                        id: id.to_string(),
-                                        msg,
+                        self.ops.lock().unwrap().push(RecordedOp::TurnInput {
+                            items: content.clone(),
+                            mode: mode.clone(),
+                            thread_settings,
+                            additional_context,
+                            responsesapi_client_metadata,
+                            final_output_json_schema: start.final_output_json_schema.clone(),
+                        });
+
+                        match mode {
+                            TurnInputMode::Steer { expected_turn_id } => {
+                                // `handle_steer` only cares about the
+                                // `Steered` value from `reply`, never about
+                                // this `submit()` call's own returned id
+                                // (see `ThreadActor::handle_steer`), so
+                                // there is no need for any configurable
+                                // outcome here: simply echo back the
+                                // requested `expected_turn_id`.
+                                let _ = reply.send(Ok(TurnInputSubmission::Steered {
+                                    turn_id: expected_turn_id,
+                                }));
+                            }
+                            TurnInputMode::StartIfIdle | TurnInputMode::StartOrSteer => {
+                                *self.active_prompt_id.lock().unwrap() = Some(id.to_string());
+                                let _ = reply.send(Ok(TurnInputSubmission::Started {
+                                    turn_id: id.to_string(),
+                                }));
+
+                                let prompt = content
+                                    .into_iter()
+                                    .map(|i| match i {
+                                        UserInput::Text { text, .. } => text,
+                                        _ => unimplemented!(),
                                     })
-                                    .unwrap();
-                            };
-                            send(EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                                call_id: "call-a".into(),
-                                process_id: None,
-                                turn_id: turn_id.clone(),
-                                command: vec!["echo".into(), "a".into()],
-                                cwd: codex_utils_path_uri::PathUri::from_host_native_path(&cwd).unwrap(),
-                                parsed_cmd: vec![ParsedCommand::Unknown {
-                                    cmd: "echo a".into(),
-                                }],
-                                source: Default::default(),
-                                interaction_input: None,
-                                started_at_ms: 0,
-                                summary: None,
-                            }));
-                            send(EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                                call_id: "call-b".into(),
-                                process_id: None,
-                                turn_id: turn_id.clone(),
-                                command: vec!["echo".into(), "b".into()],
-                                cwd: codex_utils_path_uri::PathUri::from_host_native_path(&cwd).unwrap(),
-                                parsed_cmd: vec![ParsedCommand::Unknown {
-                                    cmd: "echo b".into(),
-                                }],
-                                source: Default::default(),
-                                interaction_input: None,
-                                started_at_ms: 0,
-                                summary: None,
-                            }));
-                            send(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                                call_id: "call-a".into(),
-                                process_id: None,
-                                turn_id: turn_id.clone(),
-                                command: vec!["echo".into(), "a".into()],
-                                cwd: codex_utils_path_uri::PathUri::from_host_native_path(&cwd).unwrap(),
-                                parsed_cmd: vec![],
-                                source: Default::default(),
-                                interaction_input: None,
-                                stdout: "a\n".into(),
-                                stderr: String::new(),
-                                aggregated_output: "a\n".into(),
-                                exit_code: 0,
-                                duration: std::time::Duration::from_millis(10),
-                                formatted_output: "a\n".into(),
-                                status: ExecCommandStatus::Completed,
-                                completed_at_ms: 0,
-                            }));
-                            send(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                                call_id: "call-b".into(),
-                                process_id: None,
-                                turn_id: turn_id.clone(),
-                                command: vec!["echo".into(), "b".into()],
-                                cwd: codex_utils_path_uri::PathUri::from_host_native_path(&cwd).unwrap(),
-                                parsed_cmd: vec![],
-                                source: Default::default(),
-                                interaction_input: None,
-                                stdout: "b\n".into(),
-                                stderr: String::new(),
-                                aggregated_output: "b\n".into(),
-                                exit_code: 0,
-                                duration: std::time::Duration::from_millis(10),
-                                formatted_output: "b\n".into(),
-                                status: ExecCommandStatus::Completed,
-                                completed_at_ms: 0,
-                            }));
-                            send(EventMsg::TurnComplete(TurnCompleteEvent {
-                                last_agent_message: None,
-                                turn_id,
-                                completed_at: None,
-                                duration_ms: None,
-                                time_to_first_token_ms: None,
-                            }));
-                        } else if prompt == "image-generation" {
-                            let turn_id = id.to_string();
-                            let saved_path = image_generation_test_saved_path();
-                            let send = |msg| {
-                                self.op_tx
-                                    .send(Event {
-                                        id: id.to_string(),
-                                        msg,
-                                    })
-                                    .unwrap();
-                            };
-                            send(EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
-                                call_id: "ig-1".into(),
-                            }));
-                            send(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
-                                call_id: "ig-1".into(),
-                                status: "completed".into(),
-                                revised_prompt: Some("A tiny blue square".into()),
-                                result: "Zm9v".into(),
-                                saved_path: Some(saved_path.try_into()?),
-                            }));
-                            send(EventMsg::TurnComplete(TurnCompleteEvent {
-                                last_agent_message: None,
-                                turn_id,
-                                completed_at: None,
-                                duration_ms: None,
-                                time_to_first_token_ms: None,
-                            }));
-                        } else if prompt == "thread-goal-update" {
-                            let turn_id = id.to_string();
-                            let thread_id = ThreadId::default();
-                            self.op_tx
-                                .send(Event {
-                                    id: id.to_string(),
-                                    msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
-                                        thread_id,
-                                        turn_id: Some(turn_id.clone()),
-                                        goal: ThreadGoal {
-                                            thread_id,
-                                            objective: "Ship the goal update".to_string(),
-                                            status: ThreadGoalStatus::Active,
-                                            token_budget: Some(100),
-                                            tokens_used: 10,
-                                            time_used_seconds: 2,
-                                            created_at: 1,
-                                            updated_at: 2,
-                                        },
-                                    }),
-                                })
-                                .unwrap();
-                            self.op_tx
-                                .send(Event {
-                                    id: id.to_string(),
-                                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                                    .join("\n");
+
+                                if prompt == "parallel-exec" {
+                                    // Emit interleaved exec events: Begin A, Begin B, End A, End B
+                                    let turn_id = id.to_string();
+                                    let cwd = std::env::current_dir().unwrap();
+                                    let send = |msg| {
+                                        self.op_tx
+                                            .send(Event {
+                                                id: id.to_string(),
+                                                msg,
+                                            })
+                                            .unwrap();
+                                    };
+                                    send(EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                                        call_id: "call-a".into(),
+                                        process_id: None,
+                                        turn_id: turn_id.clone(),
+                                        command: vec!["echo".into(), "a".into()],
+                                        cwd: codex_utils_path_uri::PathUri::from_host_native_path(
+                                            &cwd,
+                                        )
+                                        .unwrap(),
+                                        parsed_cmd: vec![ParsedCommand::Unknown {
+                                            cmd: "echo a".into(),
+                                        }],
+                                        source: Default::default(),
+                                        interaction_input: None,
+                                        started_at_ms: 0,
+                                        summary: None,
+                                        plugin_id: None,
+                                        script_path: None,
+                                    }));
+                                    send(EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                                        call_id: "call-b".into(),
+                                        process_id: None,
+                                        turn_id: turn_id.clone(),
+                                        command: vec!["echo".into(), "b".into()],
+                                        cwd: codex_utils_path_uri::PathUri::from_host_native_path(
+                                            &cwd,
+                                        )
+                                        .unwrap(),
+                                        parsed_cmd: vec![ParsedCommand::Unknown {
+                                            cmd: "echo b".into(),
+                                        }],
+                                        source: Default::default(),
+                                        interaction_input: None,
+                                        started_at_ms: 0,
+                                        summary: None,
+                                        plugin_id: None,
+                                        script_path: None,
+                                    }));
+                                    send(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                                        call_id: "call-a".into(),
+                                        process_id: None,
+                                        turn_id: turn_id.clone(),
+                                        command: vec!["echo".into(), "a".into()],
+                                        cwd: codex_utils_path_uri::PathUri::from_host_native_path(
+                                            &cwd,
+                                        )
+                                        .unwrap(),
+                                        parsed_cmd: vec![],
+                                        source: Default::default(),
+                                        interaction_input: None,
+                                        stdout: "a\n".into(),
+                                        stderr: String::new(),
+                                        aggregated_output: "a\n".into(),
+                                        exit_code: 0,
+                                        duration: std::time::Duration::from_millis(10),
+                                        formatted_output: "a\n".into(),
+                                        status: ExecCommandStatus::Completed,
+                                        completed_at_ms: 0,
+                                        plugin_id: None,
+                                        script_path: None,
+                                    }));
+                                    send(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                                        call_id: "call-b".into(),
+                                        process_id: None,
+                                        turn_id: turn_id.clone(),
+                                        command: vec!["echo".into(), "b".into()],
+                                        cwd: codex_utils_path_uri::PathUri::from_host_native_path(
+                                            &cwd,
+                                        )
+                                        .unwrap(),
+                                        parsed_cmd: vec![],
+                                        source: Default::default(),
+                                        interaction_input: None,
+                                        stdout: "b\n".into(),
+                                        stderr: String::new(),
+                                        aggregated_output: "b\n".into(),
+                                        exit_code: 0,
+                                        duration: std::time::Duration::from_millis(10),
+                                        formatted_output: "b\n".into(),
+                                        status: ExecCommandStatus::Completed,
+                                        completed_at_ms: 0,
+                                        plugin_id: None,
+                                        script_path: None,
+                                    }));
+                                    send(EventMsg::TurnComplete(TurnCompleteEvent {
                                         last_agent_message: None,
                                         turn_id,
                                         completed_at: None,
                                         duration_ms: None,
                                         time_to_first_token_ms: None,
-                                    }),
-                                })
-                                .unwrap();
-                        } else if prompt == "approval-block" {
-                            self.op_tx
-                                .send(Event {
-                                    id: id.to_string(),
-                                    msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                                        call_id: "call-id".to_string(),
-                                        approval_id: Some("approval-id".to_string()),
-                                        turn_id: id.to_string(),
-                                        environment_id: None,
-                                        started_at_ms: 0,
-                                        command: vec!["echo".to_string(), "hi".to_string()],
-                                        cwd: std::env::current_dir().unwrap().try_into().unwrap(),
-                                        reason: None,
-                                        network_approval_context: None,
-                                        proposed_execpolicy_amendment: None,
-                                        proposed_network_policy_amendments: None,
-                                        additional_permissions: None,
-                                        available_decisions: Some(vec![
-                                            ReviewDecision::Approved,
-                                            ReviewDecision::Abort,
-                                        ]),
-                                        parsed_cmd: vec![ParsedCommand::Unknown {
-                                            cmd: "echo hi".to_string(),
-                                        }],
-                                    }),
-                                })
-                                .unwrap();
-                        } else {
-                            self.op_tx
-                                .send(Event {
-                                    id: id.to_string(),
-                                    msg: EventMsg::AgentMessageContentDelta(
-                                        AgentMessageContentDeltaEvent {
-                                            thread_id: id.to_string(),
-                                            turn_id: id.to_string(),
-                                            item_id: id.to_string(),
-                                            delta: prompt.clone(),
+                                        error: None,
+                                        started_at: None,
+                                    }));
+                                } else if prompt == "image-generation" {
+                                    let turn_id = id.to_string();
+                                    let saved_path = image_generation_test_saved_path();
+                                    let send = |msg| {
+                                        self.op_tx
+                                            .send(Event {
+                                                id: id.to_string(),
+                                                msg,
+                                            })
+                                            .unwrap();
+                                    };
+                                    send(EventMsg::ImageGenerationBegin(
+                                        ImageGenerationBeginEvent {
+                                            call_id: "ig-1".into(),
                                         },
-                                    ),
-                                })
-                                .unwrap();
-                            // Send non-delta event (should be deduplicated, but handled by deduplication)
-                            self.op_tx
-                                .send(Event {
-                                    id: id.to_string(),
-                                    msg: EventMsg::AgentMessage(AgentMessageEvent {
-                                        message: prompt,
-                                        phase: None,
-                                        memory_citation: None,
-                                    }),
-                                })
-                                .unwrap();
-                            self.op_tx
-                                .send(Event {
-                                    id: id.to_string(),
-                                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                                    ));
+                                    send(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
+                                        call_id: "ig-1".into(),
+                                        status: "completed".into(),
+                                        revised_prompt: Some("A tiny blue square".into()),
+                                        result: "Zm9v".into(),
+                                        saved_path: Some(saved_path.try_into()?),
+                                        transparent_background: None,
+                                        failure: None,
+                                    }));
+                                    send(EventMsg::TurnComplete(TurnCompleteEvent {
                                         last_agent_message: None,
-                                        turn_id: id.to_string(),
+                                        turn_id,
                                         completed_at: None,
                                         duration_ms: None,
                                         time_to_first_token_ms: None,
-                                    }),
-                                })
-                                .unwrap();
+                                        error: None,
+                                        started_at: None,
+                                    }));
+                                } else if prompt == "thread-goal-update" {
+                                    let turn_id = id.to_string();
+                                    let thread_id = ThreadId::default();
+                                    self.op_tx
+                                        .send(Event {
+                                            id: id.to_string(),
+                                            msg: EventMsg::ThreadGoalUpdated(
+                                                ThreadGoalUpdatedEvent {
+                                                    thread_id,
+                                                    turn_id: Some(turn_id.clone()),
+                                                    goal: ThreadGoal {
+                                                        thread_id,
+                                                        objective: "Ship the goal update"
+                                                            .to_string(),
+                                                        status: ThreadGoalStatus::Active,
+                                                        token_budget: Some(100),
+                                                        tokens_used: 10,
+                                                        time_used_seconds: 2,
+                                                        created_at: 1,
+                                                        updated_at: 2,
+                                                    },
+                                                },
+                                            ),
+                                        })
+                                        .unwrap();
+                                    self.op_tx
+                                        .send(Event {
+                                            id: id.to_string(),
+                                            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                                                last_agent_message: None,
+                                                turn_id,
+                                                completed_at: None,
+                                                duration_ms: None,
+                                                time_to_first_token_ms: None,
+                                                error: None,
+                                                started_at: None,
+                                            }),
+                                        })
+                                        .unwrap();
+                                } else if prompt == "approval-block" {
+                                    self.op_tx
+                                        .send(Event {
+                                            id: id.to_string(),
+                                            msg: EventMsg::ExecApprovalRequest(
+                                                ExecApprovalRequestEvent {
+                                                    kind:
+                                                        codex_protocol::approvals::ExecApprovalKind::default(
+                                                        ),
+                                                    call_id: "call-id".to_string(),
+                                                    plugin_id: None,
+                                                    script_path: None,
+                                                    approval_id: Some("approval-id".to_string()),
+                                                    turn_id: id.to_string(),
+                                                    environment_id: None,
+                                                    started_at_ms: 0,
+                                                    command: vec![
+                                                        "echo".to_string(),
+                                                        "hi".to_string(),
+                                                    ],
+                                                    cwd: codex_utils_path_uri::LegacyAppPathString::from_path(
+                                                        &std::env::current_dir().unwrap(),
+                                                    ),
+                                                    reason: None,
+                                                    network_approval_context: None,
+                                                    proposed_execpolicy_amendment: None,
+                                                    proposed_network_policy_amendments: None,
+                                                    additional_permissions: None,
+                                                    available_decisions: Some(vec![
+                                                        ReviewDecision::Approved,
+                                                        ReviewDecision::Abort,
+                                                    ]),
+                                                    parsed_cmd: vec![ParsedCommand::Unknown {
+                                                        cmd: "echo hi".to_string(),
+                                                    }],
+                                                },
+                                            ),
+                                        })
+                                        .unwrap();
+                                } else if prompt == "steer-target" {
+                                    // Deliberately emits no events: the turn
+                                    // stays open (and `active_prompt_id` set
+                                    // above) indefinitely, so tests can
+                                    // steer into it without racing a
+                                    // `TurnComplete`. Distinct from
+                                    // "approval-block", which also never
+                                    // completes but additionally emits a
+                                    // permission-request event this doesn't
+                                    // need.
+                                } else {
+                                    self.op_tx
+                                        .send(Event {
+                                            id: id.to_string(),
+                                            msg: EventMsg::AgentMessageContentDelta(
+                                                AgentMessageContentDeltaEvent {
+                                                    thread_id: id.to_string(),
+                                                    turn_id: id.to_string(),
+                                                    item_id: id.to_string(),
+                                                    delta: prompt.clone(),
+                                                },
+                                            ),
+                                        })
+                                        .unwrap();
+                                    // Send non-delta event (should be deduplicated, but handled by deduplication)
+                                    self.op_tx
+                                        .send(Event {
+                                            id: id.to_string(),
+                                            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                                                message: prompt,
+                                                phase: None,
+                                                memory_citation: None,
+                                                delivery: None,
+                                            }),
+                                        })
+                                        .unwrap();
+                                    self.op_tx
+                                        .send(Event {
+                                            id: id.to_string(),
+                                            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                                                last_agent_message: None,
+                                                turn_id: id.to_string(),
+                                                completed_at: None,
+                                                duration_ms: None,
+                                                time_to_first_token_ms: None,
+                                                error: None,
+                                                started_at: None,
+                                            }),
+                                        })
+                                        .unwrap();
+                                }
+                            }
                         }
                     }
                     Op::Compact => {
+                        self.ops.lock().unwrap().push(RecordedOp::Compact);
                         self.op_tx
                             .send(Event {
                                 id: id.to_string(),
@@ -6133,6 +6502,7 @@ mod tests {
                                     message: "Compact task completed".to_string(),
                                     phase: None,
                                     memory_citation: None,
+                                    delivery: None,
                                 }),
                             })
                             .unwrap();
@@ -6145,11 +6515,16 @@ mod tests {
                                     completed_at: None,
                                     duration_ms: None,
                                     time_to_first_token_ms: None,
+                                    error: None,
+                                    started_at: None,
                                 }),
                             })
                             .unwrap();
                     }
                     Op::Review { review_request } => {
+                        self.ops.lock().unwrap().push(RecordedOp::Review {
+                            review_request: review_request.clone(),
+                        });
                         self.op_tx
                             .send(Event {
                                 id: id.to_string(),
@@ -6188,18 +6563,62 @@ mod tests {
                                     completed_at: None,
                                     duration_ms: None,
                                     time_to_first_token_ms: None,
+                                    error: None,
+                                    started_at: None,
                                 }),
                             })
                             .unwrap();
                     }
-                    Op::ExecApproval { .. }
-                    | Op::ResolveElicitation { .. }
-                    | Op::RequestPermissionsResponse { .. }
-                    | Op::PatchApproval { .. }
-                    | Op::ThreadSettings { .. }
-                    | Op::UserInputAnswer { .. }
-                    | Op::Interrupt => {}
+                    Op::ExecApproval { id: approval_id, turn_id, decision } => {
+                        self.ops.lock().unwrap().push(RecordedOp::ExecApproval {
+                            id: approval_id,
+                            turn_id,
+                            decision,
+                        });
+                    }
+                    Op::ResolveElicitation {
+                        server_name,
+                        request_id,
+                        decision,
+                        content,
+                        meta,
+                    } => {
+                        self.ops.lock().unwrap().push(RecordedOp::ResolveElicitation {
+                            server_name,
+                            request_id,
+                            decision,
+                            content,
+                            meta,
+                        });
+                    }
+                    Op::RequestPermissionsResponse { id: request_id, response } => {
+                        self.ops.lock().unwrap().push(RecordedOp::RequestPermissionsResponse {
+                            id: request_id,
+                            response,
+                        });
+                    }
+                    Op::PatchApproval { id: approval_id, decision } => {
+                        self.ops.lock().unwrap().push(RecordedOp::PatchApproval {
+                            id: approval_id,
+                            decision,
+                        });
+                    }
+                    Op::ThreadSettings { thread_settings } => {
+                        self.ops.lock().unwrap().push(RecordedOp::ThreadSettings {
+                            thread_settings,
+                        });
+                    }
+                    Op::UserInputAnswer { id: answer_id, response } => {
+                        self.ops.lock().unwrap().push(RecordedOp::UserInputAnswer {
+                            id: answer_id,
+                            response,
+                        });
+                    }
+                    Op::Interrupt => {
+                        self.ops.lock().unwrap().push(RecordedOp::Interrupt);
+                    }
                     Op::Shutdown => {
+                        self.ops.lock().unwrap().push(RecordedOp::Shutdown);
                         if let Some(active_prompt_id) = self.active_prompt_id.lock().unwrap().take()
                         {
                             self.op_tx
@@ -6211,6 +6630,7 @@ mod tests {
                                             codex_protocol::protocol::TurnAbortReason::Interrupted,
                                         completed_at: None,
                                         duration_ms: None,
+                                        started_at: None,
                                     }),
                                 })
                                 .unwrap();
@@ -6230,20 +6650,6 @@ mod tests {
                     return Err(CodexErr::InternalAgentDied);
                 };
                 Ok(event)
-            })
-        }
-
-        fn steer_input(
-            &self,
-            input: Vec<UserInput>,
-        ) -> Pin<Box<dyn Future<Output = Result<String, SteerInputError>> + Send + '_>> {
-            Box::pin(async move {
-                self.steer_calls.lock().unwrap().push(input);
-                self.steer_result
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .unwrap_or_else(|| Ok("turn-1".to_string()))
             })
         }
     }
@@ -6421,8 +6827,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_steer_injects_into_active_turn() -> anyhow::Result<()> {
-        let (_session_id, _client, thread, message_tx, _handle) = setup().await?;
-        thread.set_steer_result(Ok("turn-42".to_string()));
+        let (session_id, _client, thread, message_tx, _handle) = setup().await?;
+
+        // "steer-target" is a stub-recognized prompt that deliberately never
+        // emits a TurnComplete event, so the turn stays active (and remains
+        // the sole entry in `self.submissions`) for as long as we hold onto
+        // the inner receiver without awaiting it. That's what lets the
+        // subsequent Steer message find exactly one active turn to target.
+        let (prompt_response_tx, prompt_response_rx) = tokio::sync::oneshot::channel();
+        message_tx.send(ThreadMessage::Prompt {
+            request: PromptRequest::new(session_id.clone(), vec!["steer-target".into()]),
+            response_tx: prompt_response_tx,
+        })?;
+        let _turn_completion_rx = prompt_response_rx.await??;
 
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         message_tx.send(ThreadMessage::Steer {
@@ -6431,27 +6848,31 @@ mod tests {
         })?;
 
         let turn_id = response_rx.await?.expect("steer should succeed");
-        assert_eq!(turn_id, "turn-42");
+        // The stub's `submit` allocates ids `"0"`, `"1"`, ... in call order;
+        // the "steer-target" prompt claimed "0", so that's the turn Steer
+        // must have targeted.
+        assert_eq!(turn_id, "0");
 
-        // Steering must not go through the prompt queue: it should never
-        // submit an `Op` to the underlying thread, only call `steer_input`
-        // directly.
-        assert!(thread.ops.lock().unwrap().is_empty());
-
-        let calls = thread.steer_calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert!(matches!(
-            &calls[0][..],
-            [UserInput::Text { text, .. }] if text == "steer this in"
-        ));
+        let ops = thread.ops.lock().unwrap();
+        assert!(
+            matches!(
+                ops.last(),
+                Some(RecordedOp::TurnInput {
+                    items,
+                    mode: TurnInputMode::Steer { expected_turn_id },
+                    ..
+                }) if expected_turn_id == "0"
+                    && matches!(&items[..], [UserInput::Text { text, .. }] if text == "steer this in")
+            ),
+            "expected a Steer TurnInput op targeting turn 0, got: {ops:?}"
+        );
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_steer_no_active_turn_errors() -> anyhow::Result<()> {
-        let (_session_id, _client, thread, message_tx, _handle) = setup().await?;
-        thread.set_steer_result(Err(SteerInputError::NoActiveTurn(vec![])));
+        let (_session_id, _client, _thread, message_tx, _handle) = setup().await?;
 
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         message_tx.send(ThreadMessage::Steer {
@@ -6459,15 +6880,24 @@ mod tests {
             response_tx,
         })?;
 
+        // No prompt was ever submitted, so `handle_steer`'s precondition
+        // (exactly one active entry in `self.submissions`) fails before the
+        // stub thread is even reached.
         let result = response_rx.await?;
-        assert!(matches!(result, Err(SteerInputError::NoActiveTurn(_))));
+        let err = result.expect_err("steer with no active turn must fail");
+        assert_eq!(i32::from(err.code), -32002);
+        assert!(
+            err.message.contains("no_active_turn"),
+            "message should contain the stable `no_active_turn` substring, got: {}",
+            err.message
+        );
 
         Ok(())
     }
 
     #[test]
     fn test_steer_input_error_no_active_turn_maps_to_dash_32002_with_stable_substring() {
-        let err = steer_input_error_to_acp_error(SteerInputError::NoActiveTurn(vec![]));
+        let err = not_submitted_reason_to_steer_error(NotSubmittedReason::NoActiveTurn);
         assert_eq!(i32::from(err.code), -32002);
         assert!(
             err.message.contains("no_active_turn"),
@@ -6480,9 +6910,9 @@ mod tests {
     fn test_steer_input_error_active_turn_not_steerable_maps_to_dash_32002_with_stable_substring()
      {
         for turn_kind in [NonSteerableTurnKind::Review, NonSteerableTurnKind::Compact] {
-            let err = steer_input_error_to_acp_error(SteerInputError::ActiveTurnNotSteerable {
-                turn_kind,
-            });
+            let err = not_submitted_reason_to_steer_error(
+                NotSubmittedReason::ActiveTurnNotSteerable { turn_kind },
+            );
             assert_eq!(i32::from(err.code), -32002);
             assert!(
                 err.message.contains("not_steerable"),
@@ -6494,7 +6924,7 @@ mod tests {
 
     #[test]
     fn test_steer_input_error_expected_turn_mismatch_maps_to_dash_32002_with_stable_substring() {
-        let err = steer_input_error_to_acp_error(SteerInputError::ExpectedTurnMismatch {
+        let err = not_submitted_reason_to_steer_error(NotSubmittedReason::ExpectedTurnMismatch {
             expected: "turn-1".to_string(),
             actual: "turn-2".to_string(),
         });
@@ -6510,7 +6940,7 @@ mod tests {
 
     #[test]
     fn test_steer_input_error_empty_input_maps_to_invalid_params_not_dash_32002() {
-        let err = steer_input_error_to_acp_error(SteerInputError::EmptyInput);
+        let err = not_submitted_reason_to_steer_error(NotSubmittedReason::EmptyInput);
         assert_ne!(
             i32::from(err.code),
             -32002,
@@ -6548,13 +6978,21 @@ mod tests {
                 environment_id: None,
                 started_at_ms: 0,
                 command: vec!["echo".to_string(), "hi".to_string()],
-                cwd: std::env::current_dir()?.try_into()?,
+                cwd: codex_utils_path_uri::LegacyAppPathString::from_path(
+                    &std::env::current_dir()?,
+                ),
                 reason: None,
+                kind: codex_protocol::approvals::ExecApprovalKind::default(),
+                plugin_id: None,
+                script_path: None,
                 network_approval_context: None,
                 proposed_execpolicy_amendment: None,
                 proposed_network_policy_amendments: None,
                 additional_permissions: None,
-                available_decisions: Some(vec![ReviewDecision::Approved, ReviewDecision::Denied]),
+                available_decisions: Some(vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::denied("denied"),
+                ]),
                 parsed_cmd: vec![ParsedCommand::Unknown {
                     cmd: "echo hi".to_string(),
                 }],
@@ -6592,10 +7030,10 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert!(matches!(
             ops.last(),
-            Some(Op::ExecApproval {
+            Some(RecordedOp::ExecApproval {
                 id,
                 turn_id,
-                decision: ReviewDecision::Denied,
+                decision: ReviewDecision::Denied { .. },
             }) if id == "approval-id" && turn_id.as_deref() == Some("turn-id")
         ));
 
@@ -6696,7 +7134,7 @@ mod tests {
 
         let op = thread.ops.lock().unwrap().last().cloned().unwrap();
         match op {
-            Op::ResolveElicitation {
+            RecordedOp::ResolveElicitation {
                 server_name,
                 request_id: codex_protocol::mcp::RequestId::String(id),
                 decision,
@@ -6769,7 +7207,7 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert!(matches!(
             ops.last(),
-            Some(Op::ResolveElicitation {
+            Some(RecordedOp::ResolveElicitation {
                 server_name,
                 request_id: codex_protocol::mcp::RequestId::String(request_id),
                 decision: ElicitationAction::Decline,
@@ -6806,8 +7244,13 @@ mod tests {
                     environment_id: None,
                     started_at_ms: 0,
                     command: vec!["echo".to_string(), "hi".to_string()],
-                    cwd: std::env::current_dir()?.try_into()?,
+                    cwd: codex_utils_path_uri::LegacyAppPathString::from_path(
+                        &std::env::current_dir()?,
+                    ),
                     reason: None,
+                    kind: codex_protocol::approvals::ExecApprovalKind::default(),
+                    plugin_id: None,
+                    script_path: None,
                     network_approval_context: None,
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
@@ -6830,6 +7273,7 @@ mod tests {
                     message: "still flowing".to_string(),
                     phase: None,
                     memory_citation: None,
+                    delivery: None,
                 }),
             )
             .await;
@@ -6883,8 +7327,13 @@ mod tests {
                     environment_id: None,
                     started_at_ms: 0,
                     command: vec!["echo".to_string(), "hi".to_string()],
-                    cwd: std::env::current_dir()?.try_into()?,
+                    cwd: codex_utils_path_uri::LegacyAppPathString::from_path(
+                        &std::env::current_dir()?,
+                    ),
                     reason: None,
+                    kind: codex_protocol::approvals::ExecApprovalKind::default(),
+                    plugin_id: None,
+                    script_path: None,
                     network_approval_context: None,
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
@@ -6950,6 +7399,7 @@ mod tests {
             call_id: "call-id".to_string(),
             turn_id: "turn-id".to_string(),
             auto_resolution_ms: None,
+            is_blocking: true,
             questions: vec![RequestUserInputQuestion {
                 id: "q1".to_string(),
                 header: "Header".to_string(),
@@ -7033,7 +7483,7 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert!(matches!(
             ops.last(),
-            Some(Op::UserInputAnswer { id, response })
+            Some(RecordedOp::UserInputAnswer { id, response })
                 if *id == event.turn_id && *id == turn_id && response.answers.is_empty()
         ));
 
@@ -7087,7 +7537,7 @@ mod tests {
         let ops = thread.ops.lock().unwrap();
         assert!(matches!(
             ops.last(),
-            Some(Op::UserInputAnswer { id, response })
+            Some(RecordedOp::UserInputAnswer { id, response })
                 if *id == turn_id
                     && response.answers.get("q1").map(|a| a.answers.as_slice())
                         == Some(["42".to_string()].as_slice())
@@ -7150,7 +7600,7 @@ mod tests {
             let ops = thread.ops.lock().unwrap();
             assert!(matches!(
                 ops.last(),
-                Some(Op::UserInputAnswer { id, response })
+                Some(RecordedOp::UserInputAnswer { id, response })
                     if *id == turn_id && response.answers.is_empty()
             ));
         }
@@ -7221,7 +7671,7 @@ mod tests {
         notify.notify_one();
 
         let ops = conversation.ops.lock().unwrap();
-        assert!(matches!(ops.last(), Some(Op::Shutdown)));
+        assert!(matches!(ops.last(), Some(RecordedOp::Shutdown)));
 
         Ok(())
     }

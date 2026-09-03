@@ -87,11 +87,11 @@ use agent_client_protocol::schema::{McpServer, SessionId};
 use agent_client_protocol::{JsonRpcRequest, JsonRpcResponse};
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_history::RolloutItem;
 use codex_protocol::protocol::{
     APPS_INSTRUCTIONS_OPEN_TAG, COLLABORATION_MODE_OPEN_TAG, CONTEXT_WINDOW_GUIDANCE_OPEN_TAG,
     CONTEXT_WINDOW_OPEN_TAG, ENVIRONMENT_CONTEXT_OPEN_TAG, EventMsg, MULTI_AGENT_MODE_OPEN_TAG,
-    PLUGINS_INSTRUCTIONS_OPEN_TAG, REALTIME_CONVERSATION_OPEN_TAG, RolloutItem,
-    SKILLS_INSTRUCTIONS_OPEN_TAG,
+    PLUGINS_INSTRUCTIONS_OPEN_TAG, REALTIME_CONVERSATION_OPEN_TAG, SKILLS_INSTRUCTIONS_OPEN_TAG,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -300,7 +300,12 @@ fn is_contextual_user_message(content: &[ContentItem]) -> bool {
 /// rule; `message_text` simply omits the non-text parts from the anchor
 /// string.
 fn classify_user_message(item: &RolloutItem) -> Option<String> {
-    let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item else {
+    // Upstream 0.152 wraps the persisted response item in a `ResponseItemEnvelope`
+    // (item + harness metadata); the classification still keys off the item itself.
+    let RolloutItem::ResponseItem(envelope) = item else {
+        return None;
+    };
+    let ResponseItem::Message { role, content, .. } = &envelope.item else {
         return None;
     };
     if role != "user" {
@@ -423,10 +428,19 @@ pub fn warn_on_nth_hint_mismatch(nth_hint: Option<usize>, source_session_id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_history::ResponseItemEnvelope;
     use codex_protocol::protocol::ThreadRolledBackEvent;
 
+    /// Wrap a bare `ResponseItem` the way persistence does since upstream 0.152.
+    fn rollout(item: ResponseItem) -> RolloutItem {
+        RolloutItem::ResponseItem(ResponseItemEnvelope {
+            item,
+            metadata: None,
+        })
+    }
+
     fn user_message(text: &str) -> RolloutItem {
-        RolloutItem::ResponseItem(ResponseItem::Message {
+        rollout(ResponseItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -438,7 +452,7 @@ mod tests {
     }
 
     fn agent_message(text: &str) -> RolloutItem {
-        RolloutItem::ResponseItem(ResponseItem::Message {
+        rollout(ResponseItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -450,7 +464,7 @@ mod tests {
     }
 
     fn contextual_user_message(tag_body: &str) -> RolloutItem {
-        RolloutItem::ResponseItem(ResponseItem::Message {
+        rollout(ResponseItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -601,7 +615,7 @@ mod tests {
     #[test]
     fn multimodal_message_counts_as_one_user_message() {
         let items = vec![
-            RolloutItem::ResponseItem(ResponseItem::Message {
+            rollout(ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![
