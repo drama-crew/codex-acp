@@ -385,7 +385,7 @@ fn semantic_session_mode_ids_for_permission_profile(config: &Config) -> &'static
             let cwd = config.cwd.as_path();
             if file_system.has_full_disk_read_access()
                 && !file_system.has_full_disk_write_access()
-                && file_system.can_write_path_with_cwd(cwd, cwd)
+                && file_system.can_write_local_path_with_cwd(cwd, cwd)
             {
                 &["auto", "workspace-full-auto"]
             } else {
@@ -1586,7 +1586,7 @@ impl PromptState {
                 self.seen_reasoning_deltas = true;
                 client.send_agent_thought("\n\n");
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message , phase: _, memory_citation: _, delivery: _ }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message , phase: _, memory_citation: _, delivery: _, questions: _ }) => {
                 info!("Agent message (non-delta) received: {message:?}");
                 // We didn't receive this message via streaming
                 if !std::mem::take(&mut self.seen_message_deltas) {
@@ -4051,6 +4051,7 @@ impl<A: Auth> ThreadActor<A> {
                 phase: _,
                 memory_citation: _,
                 delivery: _,
+                questions: _,
             }) => {
                 self.client.send_agent_text(message.clone());
             }
@@ -4669,7 +4670,7 @@ fn guardian_action_summary(action: &GuardianAssessmentAction) -> Option<String> 
             Some(format!("{label} {joined}"))
         }
         GuardianAssessmentAction::ApplyPatch { files, cwd: _ } => Some(if files.len() == 1 {
-            format!("apply_patch touching {}", files[0].display())
+            format!("apply_patch touching {}", files[0])
         } else {
             format!("apply_patch touching {} files", files.len())
         }),
@@ -6490,6 +6491,7 @@ mod tests {
                                                 phase: None,
                                                 memory_citation: None,
                                                 delivery: None,
+                                                questions: None,
                                             }),
                                         })
                                         .unwrap();
@@ -6533,6 +6535,7 @@ mod tests {
                                     phase: None,
                                     memory_citation: None,
                                     delivery: None,
+                                    questions: None,
                                 }),
                             })
                             .unwrap();
@@ -7324,6 +7327,7 @@ mod tests {
                     phase: None,
                     memory_citation: None,
                     delivery: None,
+                    questions: None,
                 }),
             )
             .await;
